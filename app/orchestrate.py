@@ -94,8 +94,10 @@ def search_all(target: str, ttype: str | None) -> dict:
     selected = [p for p in prov.providers_for_type(ttype)
                 if (not p.requires_key) or (p.vault_key in configured)]
     provider_names = [p.name for p in selected]
-    if selected:
-        asyncio.create_task(_providers_bg(target, ttype, selected, parent))
+    prov_task = q.track(_providers_bg(target, ttype, selected, parent)) if selected else None
+    # Finalize the parent once children + providers complete (so it doesn't sit
+    # 'queued' forever and any parent SSE stream closes).
+    q.track(q.finalize_parent(parent, [tj["job_id"] for tj in tool_jobs], prov_task))
 
     audit("audit", "tool", "search-all", target_type=ttype, tools=len(tool_jobs),
           providers=len(provider_names))

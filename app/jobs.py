@@ -39,6 +39,7 @@ class JobQueue:
             n: asyncio.Semaphore(c) for n, c in _HEAVY.items()
         }
         self._concurrency = concurrency
+        self._bg: set[asyncio.Task] = set()  # strong refs so detached tasks aren't GC'd
 
     # --- lifecycle ---
     async def start(self) -> None:
@@ -91,7 +92,37 @@ class JobQueue:
         jid = self._insert("search_all", "search-all", target, ttype, None)
         rt = self._runtime[jid]
         rt.status = "running"
+        db.execute("UPDATE jobs SET status='running', started_at=? WHERE id=?",
+                   (now_iso(), jid))
         return jid
+
+    def track(self, coro) -> asyncio.Task:
+        """Run a detached coroutine, keeping a strong reference until it finishes."""
+        t = asyncio.create_task(coro)
+        self._bg.add(t)
+        t.add_done_callback(self._bg.discard)
+        return t
+
+    async def finalize_parent(self, parent: str, child_ids: list[str],
+                              prov_task: asyncio.Task | None = None) -> None:
+        """Mark a search_all parent terminal once its children + provider lookups
+        finish, so it isn't stuck 'queued' (or resurrected as 'error' on restart)
+        and any parent SSE subscriber closes."""
+        terminal = {"done", "error", "timeout", "cancelled"}
+        if prov_task is not None:
+            try:
+                await prov_task
+            except Exception:
+                pass
+        waited = 0
+        while child_ids and waited < 3700:
+            ph = ",".join("?" * len(child_ids))
+            rows = await db.aquery(f"SELECT status FROM jobs WHERE id IN ({ph})", child_ids)
+            if rows and all(r["status"] in terminal for r in rows):
+                break
+            await asyncio.sleep(1)
+            waited += 1
+        await self._finish(parent, "done", 0, None)
 
     # --- worker ---
     async def _worker(self, idx: int) -> None:
@@ -156,12 +187,18 @@ class JobQueue:
         await db.aexecute("UPDATE jobs SET status='running', started_at=? WHERE id=?",
                           (now_iso(), jid))
         rt.status = "running"
-        await self._publish(jid, _start_event(kind, name))
+        # Register the task before the first cancellable await and re-check the
+        # cancel flag, so a cancel arriving during the queued->running window
+        # (rt.task was still None) is not lost and the subprocess is never spawned.
+        rt.task = asyncio.current_task()
+        if rt.cancelled:
+            await self._finish(jid, "cancelled", None, "cancelled")
+            return
 
         sem = self._sems.get(name)
-        runner = self._spawn(jid, rt, argv, timeout, stdin, env)
-        rt.task = asyncio.current_task()
         try:
+            await self._publish(jid, _start_event(kind, name))
+            runner = self._spawn(jid, rt, argv, timeout, stdin, env)
             if sem:
                 async with sem:
                     status, rc, out = await runner
@@ -205,23 +242,38 @@ class JobQueue:
             q.put_nowait(event)
 
     async def subscribe(self, jid: str):
-        """Async generator of SSE events: replays buffered output then tails."""
+        """Async generator of SSE events: replays buffered output then tails.
+
+        For a live job the subscriber queue is registered BEFORE any await and the
+        buffer snapshot is taken in the same synchronous block, so no published
+        event can fall between replay and tail (no lost output, no missed SENTINEL
+        that would hang the stream).
+        """
         rt = self._runtime.get(jid)
-        row = await db.aquery_one("SELECT status, output FROM jobs WHERE id=?", (jid,))
-        if not row:
-            yield {"type": "status", "status": "error", "error": "no such job"}
-            return
-        if rt is None or rt.done:
-            # Job already finished (or only persisted): replay from DB and close.
+        if rt is None:
+            # Not a live runtime job (provider job, or restored after restart):
+            # replay from the DB and close.
+            row = await db.aquery_one("SELECT status, output FROM jobs WHERE id=?", (jid,))
+            if not row:
+                yield {"type": "status", "status": "error", "error": "no such job"}
+                return
             if row["output"]:
                 yield {"type": "output", "data": row["output"]}
             yield {"type": "status", "status": row["status"]}
             return
+
+        # Live job: register the subscriber and snapshot the buffer atomically
+        # (no await between add and snapshot → the worker task cannot interleave).
         q: asyncio.Queue = asyncio.Queue()
-        if rt.output:
-            yield {"type": "output", "data": "".join(rt.output)}
         rt.subs.add(q)
+        replay = "".join(rt.output)
+        already_done = rt.done
         try:
+            if replay:
+                yield {"type": "output", "data": replay}
+            if already_done:
+                yield {"type": "status", "status": rt.status}
+                return
             while True:
                 item = await q.get()
                 if item is _SENTINEL:

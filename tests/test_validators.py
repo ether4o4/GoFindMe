@@ -51,6 +51,10 @@ def test_overlong_rejected():
 def test_leading_dash_rejected():
     assert not is_valid("-rf", "username")
     assert not is_valid("-x.com", "domain")
+    # email local part must not start with '-' (argument-injection guard)
+    assert not is_valid("-t@example.com", "email")
+    assert not is_valid("--upload-file@a.co", "email")
+    assert is_valid("alice@example.com", "email")
 
 
 def test_internal_ip_still_valid_type_but_flagged():

@@ -18,7 +18,9 @@ TARGET_TYPES = ["username", "realname", "email", "phone", "domain", "ip", "hash"
 # Anchored whitelists. None => validated by a dedicated function below.
 _PATTERNS: dict[str, re.Pattern[str] | None] = {
     "username": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"),
-    "email": re.compile(r"^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,24}$"),
+    # (?!-) keeps the local part from starting with '-' so a validated email can
+    # never begin with a dash (preserves the argument-injection guard).
+    "email": re.compile(r"^(?!-)[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,24}$"),
     "phone": re.compile(r"^\+?[1-9]\d{6,14}$"),
     "domain": re.compile(
         r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-)){1,}$"
