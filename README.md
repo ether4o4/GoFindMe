@@ -1,1 +1,161 @@
 # GoFindMe
+
+A **self-hosted OSINT / digital-footprint console**. GoFindMe runs allowlisted recon tools,
+queries provider APIs **server-side** (no browser-CORS wall), aggregates the output in one
+dashboard, and stores your findings + a personal-footprint dataset in a single database that every
+device — desktop and phone — shares. Run it once on an always-on machine and reach it from anywhere
+on your private network.
+
+> ⚠️ **Authorized use only.** GoFindMe executes reconnaissance tools and queries third-party APIs on
+> your behalf. Use it to investigate **your own** digital footprint or targets you are explicitly
+> authorized to investigate, and follow each upstream service's terms of use.
+
+It evolved from a single static `index.html` launcher (still preserved — see
+[Legacy launcher](#legacy-launcher)) into a real backend app, because a browser page cannot run
+Sherlock/Amass/etc., cannot call key-gated APIs (CORS), and has no shared storage.
+
+---
+
+## What it does
+
+- **Search All** — type a target (username, email, phone, domain, IP, hash, BTC address); GoFindMe
+  auto-detects the type, then fans out to every **installed** auto-runnable CLI tool *and* every
+  configured/keyless API provider, streaming each tool's output live and aggregating provider
+  results into cards.
+- **Runs the tools for real** — an allowlisted dispatcher executes tools as argv lists (never a
+  shell) and streams stdout to the dashboard over SSE.
+- **Server-side API operations** — Shodan, VirusTotal, HIBP, Hunter, GreyNoise, AbuseIPDB,
+  SecurityTrails, IPinfo, Censys, EmailRep, LeakCheck, IntelX, DeHashed, plus keyless crt.sh — all
+  called from the server, so your local file:// CORS limits disappear. One-click **Test connection**.
+- **Encrypted API vault** — keys sealed with AES-256-GCM (PBKDF2-SHA256, 200k iterations); the
+  passphrase is never stored. Decrypted on demand, auto-locks when idle. Optional plaintext mode.
+- **Manage tools from the dashboard** — check versions, **install / update** tools (pip, pipx, go,
+  git, npm), or **Update all installed** — output streams like any other job.
+- **Add new software easily** — define a custom tool (name, binary, accepted types, run template,
+  install method) right in the UI; it joins the registry with the same no-shell safety.
+- **Personal-footprint data layer** — Identity (emails/usernames/handles), Accounts + recovery
+  status, a digital Timeline, and Notes — stored server-side, shared across all your devices.
+- **Reports** — export a target's findings + accounts + timeline as Markdown or JSON.
+- **Audit log** of logins, vault unlocks, and every tool/provider call (never the key).
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/ether4o4/gofindme && cd gofindme
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+./run.sh                      # serves http://127.0.0.1:8000
+```
+
+Open the URL, create the owner account (one-time), and you're in. Configuration is via environment
+variables (see `.env.example`); `run.sh` loads a local `.env` if present.
+
+The OSINT tools themselves are **not** bundled — install the ones you want from the **Tools** tab
+(or your own package manager). GoFindMe detects what's present and only runs installed tools;
+everything else shows as "not installed".
+
+### Reach it from your phone (shared, synced)
+
+All devices talk to the one server, so data is shared automatically — there's nothing to sync by
+hand. To reach it off `localhost`, **do not** expose it raw to the internet. Instead:
+
+- **Recommended:** put the host on a private tunnel like **Tailscale / WireGuard**, then browse to
+  `http://<machine>:8000` from your phone. Set `GOFINDME_BIND=0.0.0.0` so it listens on the tunnel
+  interface.
+- **Public:** only behind a TLS reverse proxy (Caddy/nginx) with a real certificate. The login +
+  cookie security assume HTTPS in that case.
+
+---
+
+## Architecture
+
+```
+ phone ─┐
+ laptop ─┼──▶  FastAPI server  ──▶  SQLite (WAL)         one shared source of truth
+ desktop ┘         │  ├─ tool dispatcher → asyncio.create_subprocess_exec (argv list, no shell)
+                   │  ├─ provider layer  → httpx (server-side, proxy/CA aware)
+                   │  ├─ encrypted vault → PBKDF2 + AES-256-GCM
+                   │  └─ job queue       → live output via SSE
+                   └─ serves the responsive vanilla-JS dashboard (same origin, no CORS)
+```
+
+- **Backend:** FastAPI + `uvicorn`, in-process `asyncio` job queue (no Celery/Redis).
+- **Frontend:** responsive vanilla HTML/CSS/JS — no build step, mobile-friendly, dark theme.
+- **Data:** one server-side SQLite DB in WAL mode → inherent multi-device sync.
+
+| Path | Purpose |
+|------|---------|
+| `app/` | FastAPI backend (auth, vault, tools, jobs, providers, orchestrate, data, reports) |
+| `static/` | The dashboard (`index.html`, `css/`, `js/`) |
+| `legacy/` | The original single-file launcher, preserved and served at `/legacy` |
+| `tests/` | pytest suite (offline by default; one network-marked live test) |
+
+---
+
+## Security model
+
+Because the server now executes tools and holds API keys, the hardening below is **not optional**:
+
+- **No shell, ever.** Targets pass strict anchored validators (whitelists that forbid whitespace,
+  shell metacharacters, and leading `-`), are re-validated server-side at execution time, and are
+  passed as discrete argv elements. Custom tools' run templates inherit the same guarantees.
+- **Login required.** Single-user Argon2id password → opaque bearer token; every `/api/*` route is
+  gated. Login attempts are rate-limited. Bind defaults to `127.0.0.1`.
+- **Vault.** Keys are AES-256-GCM encrypted at rest, decrypted on demand, auto-locked when idle, and
+  never placed in a subprocess environment or log. A stolen DB without the passphrase yields nothing.
+  *Trade-off:* while unlocked, the server process holds keys in memory — keep it on a non-public bind
+  and run it as a non-root user.
+- **Tool management** (install/update) runs only an allowlist of package managers with validated
+  refs; disable it with `GOFINDME_ALLOW_TOOL_MGMT=0`.
+- Same-origin only (no CORS), strict CSP + security headers, SSRF guards (provider hosts are
+  hardcoded; private/reserved IPs are refused), per-job timeouts and output caps.
+
+See `.env.example` for every setting.
+
+---
+
+## Tools & providers
+
+**Auto-runnable CLI tools** (install what you need): sherlock, maigret, blackbird, nexfil, holehe,
+h8mail, ghunt, phoneinfoga, subfinder, amass, findomain, assetfinder, theHarvester, gau,
+waybackurls, katana, hakrawler, waymore, bbot, whois, shodan-cli, exiftool, mat2.
+
+**Manual / GUI frameworks** (listed for visibility + copy-command, never auto-executed): spiderfoot,
+recon-ng, maltego, osmedeus, foca, moriarty.
+
+**API providers:** crt.sh (keyless), emailrep (keyless), shodan, censys, virustotal, hibp, hunter,
+greynoise, abuseipdb, securitytrails, ipinfo, leakcheck, intelx, dehashed.
+
+---
+
+## Roadmap (honestly scaffolded, not faked)
+
+These are present as labeled placeholders / `501` endpoints to be filled in next:
+
+- Relationship graph visualization (tables + CRUD exist; the visual canvas is pending).
+- Analytics/privacy scoring beyond the real counts already computed.
+- Browser / cloud (Takeout) / file-image importers.
+
+---
+
+## Legacy launcher
+
+The original browser-only single-file console is preserved verbatim at `legacy/index.html` and
+served at **`/legacy`**. It runs entirely client-side (builds commands, opens web pivots, encrypts
+keys in `localStorage`) and is handy as an offline, install-free quick launcher.
+
+---
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+pytest                 # offline suite
+pytest -m network      # include the live crt.sh path test (needs outbound network)
+```
+
+## License
+
+Add your preferred license (MIT is a common choice for tooling like this).
