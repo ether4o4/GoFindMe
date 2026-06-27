@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [claude/android-apk]
+    branches: [claude/android-apk, main]
     paths:
       - 'android/**'
       - 'app/**'
@@ -14,6 +14,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to publish the Release
     steps:
       - uses: actions/checkout@v4
 
@@ -47,9 +49,26 @@ jobs:
           CHAQUOPY_PYTHON: ${{ steps.py.outputs.python-path }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Upload APK artifact
+      - name: Upload APK artifact (per-run, expires)
         uses: actions/upload-artifact@v4
         with:
           name: gofindme-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Stage APK with a friendly name
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk gofindme-debug.apk
+
+      # Permanent download: a rolling "android-latest" release whose asset URL is
+      # stable and never expires. Re-uploaded on every successful build.
+      - name: Publish APK to rolling Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: GoFindMe Android (latest debug build)
+          prerelease: true
+          body: |
+            Self-contained GoFindMe Android app (debug-signed).
+            Built from commit ${{ github.sha }}.
+            Download `gofindme-debug.apk` below.
+          files: gofindme-debug.apk
