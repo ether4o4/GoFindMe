@@ -34,13 +34,15 @@ jobs:
           cp -r app static legacy android/app/src/main/python/
           echo "Staged:" && ls android/app/src/main/python
 
-      - name: Generate Gradle wrapper
-        working-directory: android
-        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
+      # The runner's preinstalled Gradle (9.x) is too new for AGP 8.2.x, so pin 8.7.
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
