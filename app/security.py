@@ -17,7 +17,17 @@ from . import db
 from .config import settings
 from .util import audit, now_iso
 
-_pwd = CryptContext(schemes=["argon2"], deprecated="auto")
+# Prefer Argon2id; fall back to pure-Python pbkdf2_sha256 when the argon2 backend
+# isn't importable (e.g. if it fails to bundle into a packaged build). Existing
+# hashes stay verifiable as long as their scheme is present.
+try:
+    import argon2 as _argon2  # noqa: F401
+
+    _SCHEMES = ["argon2", "pbkdf2_sha256"]
+except Exception:  # pragma: no cover - depends on the install
+    _SCHEMES = ["pbkdf2_sha256"]
+
+_pwd = CryptContext(schemes=_SCHEMES, deprecated="auto")
 
 COOKIE_NAME = "gfm_token"
 
