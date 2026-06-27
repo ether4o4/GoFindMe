@@ -31,6 +31,11 @@ class CustomTool(BaseModel):
     notes: str | None = None
 
 
+def _model_dict(m) -> dict:
+    """pydantic v2/v1 compatible dump (the Android build pins pydantic v1)."""
+    return m.model_dump() if hasattr(m, "model_dump") else m.dict()
+
+
 def _require_mgmt() -> None:
     if not settings().allow_tool_mgmt:
         raise HTTPException(403, "Tool management is disabled (GOFINDME_ALLOW_TOOL_MGMT=0)")
@@ -52,7 +57,7 @@ async def managers(_t: str = security.Auth) -> dict:
 @router.post("/custom")
 async def upsert_custom(body: CustomTool, _t: str = security.Auth) -> dict:
     try:
-        spec = tools.upsert_custom_tool(body.model_dump())
+        spec = tools.upsert_custom_tool(_model_dict(body))
     except tools.ManageError as exc:
         raise HTTPException(400, str(exc))
     except ValidationError as exc:
