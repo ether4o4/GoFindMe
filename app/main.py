@@ -14,12 +14,12 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, db, jobs, security
-from .config import settings
+from .config import resource_base, settings
 from .vault import vault
 from . import (routes_auth, routes_data, routes_jobs, routes_orchestrate,
                routes_providers, routes_reports, routes_tools, routes_vault)
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = resource_base()
 STATIC = ROOT / "static"
 LEGACY = ROOT / "legacy"
 

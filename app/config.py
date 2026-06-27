@@ -6,9 +6,21 @@ run.sh). Defaults are safe for a single-user box bound to loopback.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+
+def resource_base() -> Path:
+    """Directory that holds bundled assets (static/, legacy/, app/).
+
+    Under a PyInstaller build this is the extraction dir (``sys._MEIPASS``);
+    otherwise it's the repository root.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent.parent
 
 
 def _bool(name: str, default: bool) -> bool:

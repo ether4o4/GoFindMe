@@ -17,9 +17,10 @@ from . import db
 from .config import settings
 from .util import audit, now_iso
 
-# Prefer Argon2id; fall back to pure-Python pbkdf2_sha256 where the argon2
-# native backend isn't available (e.g. the Android/Chaquopy build). Existing
-# hashes stay verifiable as long as their scheme is present.
+# Prefer Argon2id; fall back to pure-Python pbkdf2_sha256 when the argon2 backend
+# isn't available (e.g. the Android/Chaquopy build, or if it fails to bundle into
+# a packaged desktop build). Existing hashes stay verifiable while their scheme
+# is present.
 try:
     import argon2 as _argon2  # noqa: F401
 
