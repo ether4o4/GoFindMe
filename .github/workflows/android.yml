@@ -24,6 +24,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Python 3.11 (Chaquopy buildPython)
+        id: py
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -42,6 +43,8 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
+        env:
+          CHAQUOPY_PYTHON: ${{ steps.py.outputs.python-path }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK artifact
