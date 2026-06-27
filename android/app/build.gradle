@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application' version '8.2.2'
+    id 'com.chaquo.python' version '15.0.1'
+}
+
+android {
+    namespace 'com.gofindme.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.gofindme.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+        // Chaquopy builds one native payload per ABI; arm64 covers modern phones.
+        ndk { abiFilters 'arm64-v8a' }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        debug {}
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        // Bundled CPython version (must be one Chaquopy ships).
+        version '3.11'
+        buildPython 'python', 'python3'
+        pip {
+            // Pure-Python on Android: FastAPI + pydantic v1 (v2's Rust core
+            // won't build), plain uvicorn, httpx, passlib (pbkdf2 fallback).
+            install 'fastapi'
+            install 'pydantic<2'
+            install 'uvicorn'
+            install 'httpx'
+            install 'passlib'
+            install 'python-multipart'
+            // Native, but Chaquopy ships a prebuilt wheel for this pinned version.
+            install 'cryptography==42.0.5'
+        }
+    }
+}
