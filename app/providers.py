@@ -464,6 +464,24 @@ _PROVIDERS: dict[str, Provider] = {
 }
 
 
+# Direct links to where each provider's API key is obtained.
+KEY_URLS = {
+    "shodan": "https://account.shodan.io",
+    "censys": "https://search.censys.io/account/api",
+    "virustotal": "https://www.virustotal.com/gui/my-apikey",
+    "hibp": "https://haveibeenpwned.com/API/Key",
+    "hunter": "https://hunter.io/api-keys",
+    "greynoise": "https://viz.greynoise.io/account/api-key",
+    "abuseipdb": "https://www.abuseipdb.com/account/api",
+    "securitytrails": "https://securitytrails.com/app/account/credentials",
+    "ipinfo": "https://ipinfo.io/account/token",
+    "emailrep": "https://emailrep.io/key",
+    "leakcheck": "https://leakcheck.io/api",
+    "intelx": "https://intelx.io/account?tab=developer",
+    "dehashed": "https://dehashed.com/profile",
+}
+
+
 def get_provider(name: str) -> Provider | None:
     return _PROVIDERS.get(name)
 
@@ -478,6 +496,7 @@ def list_providers(configured: set[str]) -> list[dict]:
             "input_types": p.input_types,
             "needs_two_part": p.needs_two_part,
             "configured": (not p.requires_key) or (p.vault_key in configured),
+            "key_url": KEY_URLS.get(p.name, ""),
         })
     return out
 
