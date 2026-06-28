@@ -171,12 +171,13 @@ async function toolsView(root) {
   const mgr = await api.get("/api/tools/managers").catch(() => ({ allowed: false, available: {} }));
   const head = el("div", { class: "row" }, [
     el("div", { class: "small muted", style: "flex:1" },
-      [`Managers: ` + Object.entries(mgr.available).map(([m, ok]) => `${m}${ok ? "✓" : "✗"}`).join("  ")
-        + (mgr.allowed ? "" : "  · install/update disabled")]),
-    button("⬆ Update all installed", { onclick: async () => {
-      if (!mgr.allowed) return toast("Tool management disabled", true);
+      [mgr.allowed
+        ? "Managers: " + Object.entries(mgr.available).map(([m, ok]) => `${m}${ok ? "✓" : "✗"}`).join("  ")
+        : "In-app install/update is off in this build. Install tools on your computer (and make sure " +
+          "they're on your PATH) — they'll be auto-detected here. For one-click installs, use the Python/server version."]),
+    mgr.allowed ? button("⬆ Update all installed", { onclick: async () => {
       const r = await api.post("/api/tools/update-all"); toast(`Updating ${r.started.length}`); location.hash = "#/jobs";
-    } }),
+    } }) : null,
     button("＋ Add custom tool", { cls: "primary", onclick: () => addCustom(root) }),
   ]);
   root.append(el("h2", { text: "Installed tools & frameworks" }), head);
@@ -199,7 +200,7 @@ function toolCard(t, mgr) {
   const actions = el("div", { class: "row", style: "margin-top:10px" });
   if (t.available)
     actions.append(button("Version", { cls: "sm ghost", onclick: () => manage(t.name, "version") }));
-  if (t.install_method !== "none" && mgr.available[t.install_method]) {
+  if (mgr.allowed && t.install_method !== "none" && mgr.available[t.install_method]) {
     actions.append(button(t.available ? "Update" : "Install",
       { cls: "sm", onclick: () => manage(t.name, t.available ? "update" : "install") }));
   }
@@ -286,6 +287,10 @@ async function vaultView(root) {
   root.append(el("h2", { text: "API Vault" }), stateRow);
 
   const editable = st.mode === "plaintext" || st.unlocked;
+  root.append(el("div", { class: "small muted", style: "margin:0 0 12px" },
+    ["This is where API keys go. Enter each provider's key and press Save; tap " +
+     "“Get key ↗” to open where to sign up for it. Keyless providers (crt.sh) work with no key. " +
+     (st.mode === "encrypted" && !st.unlocked ? "Unlock the vault above to add or edit keys." : "")]));
   const grid = el("div", { class: "grid" });
   root.append(grid);
   for (const p of provs) {
@@ -315,6 +320,8 @@ function providerKeyCard(p, editable) {
       if (!inp.value) return; try { await api.put(`/api/vault/keys/${p.vault_key}`, { value: inp.value });
         toast("Saved"); inp.value = ""; rerender(); } catch (e) { toast(e.message, true); } }, }),
     button("Test", { cls: "sm ghost", onclick: () => testProvider(p.name) }),
+    p.key_url ? el("a", { class: "btn sm ghost", href: p.key_url, target: "_blank",
+                          rel: "noopener noreferrer", text: "Get key ↗" }) : null,
     p.configured ? button("Delete", { cls: "sm danger", onclick: async () => {
       await api.del(`/api/vault/keys/${p.vault_key}`); toast("Deleted"); rerender(); } }) : null,
   ]);
@@ -387,6 +394,11 @@ async function settingsView(root) {
   root.append(el("div", { class: "card" }, [
     el("div", { text: `Version: ${h.version}` }),
     el("div", { text: `Vault mode: ${h.vault_mode} (${h.vault_unlocked ? "unlocked" : "locked"})` }),
+    el("div", { text: `Data folder: ${h.data_dir || "—"}` }),
+    el("div", { class: "small muted", text: `Database file: ${h.db_path || "—"} (your data persists here between runs)` }),
+    h.packaged ? el("div", { class: "small muted", style: "margin-top:8px",
+      text: "Packaged app: in-app tool install/update is off (no bundled Python). Tools already on " +
+            "your system PATH are detected and run; for one-click installs, run the Python/server version." }) : null,
     el("div", { class: "small muted", style: "margin-top:8px",
       html: 'Legacy single-file launcher is preserved at <a href="/legacy" target="_blank">/legacy</a>.' }),
   ]));

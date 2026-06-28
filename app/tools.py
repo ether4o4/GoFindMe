@@ -359,7 +359,15 @@ class ManageError(ValueError):
 
 
 def _pip() -> list[str]:
-    return [sys.executable, "-m", "pip"]
+    exe = sys.executable
+    if getattr(sys, "frozen", False):
+        # In a packaged build sys.executable is the app itself, not Python — using
+        # it would re-launch the app. Fall back to a system Python if one exists.
+        py = shutil.which("python3") or shutil.which("python")
+        if not py:
+            raise ManageError("In-app install needs a system Python; install the tool manually.")
+        exe = py
+    return [exe, "-m", "pip"]
 
 
 def install_argv(spec: ToolSpec, update: bool) -> tuple[list[str], str | None]:

@@ -6,6 +6,7 @@ it stops them.
 """
 from __future__ import annotations
 
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -63,12 +64,17 @@ for r in (routes_auth, routes_vault, routes_providers, routes_tools, routes_jobs
 
 @app.get("/api/health", tags=["health"])
 async def health() -> dict:
+    s = settings()
     return {
         "ok": True,
         "version": __version__,
         "setup_complete": security.setup_complete(),
-        "vault_mode": "plaintext" if settings().vault_plaintext else "encrypted",
+        "vault_mode": "plaintext" if s.vault_plaintext else "encrypted",
         "vault_unlocked": vault.unlocked,
+        "db_path": str(s.db_path),
+        "data_dir": str(s.db_path.parent),
+        "packaged": bool(getattr(sys, "frozen", False)),
+        "tool_mgmt": s.allow_tool_mgmt,
     }
 
 
