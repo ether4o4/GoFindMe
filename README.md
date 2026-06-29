@@ -67,6 +67,25 @@ hand. To reach it off `localhost`, **do not** expose it raw to the internet. Ins
 - **Public:** only behind a TLS reverse proxy (Caddy/nginx) with a real certificate. The login +
   cookie security assume HTTPS in that case.
 
+### Self-updating launchers (one command, opens straight to the app)
+
+These pull the latest code, ensure dependencies, start the server, and open the dashboard for you.
+
+- **Android (Termux):** the full app *with* tool support runs on your phone.
+  ```bash
+  pkg install -y git
+  git clone https://github.com/ether4o4/GoFindMe ~/GoFindMe
+  bash ~/GoFindMe/scripts/gofindme-termux.sh
+  ```
+  To launch automatically whenever you open Termux, append that last line to `~/.bashrc`. Uses the
+  Termux `python-cryptography` package + pydantic v1, so there's no Rust build. (For a no-setup phone
+  option, the Android **APK** in the `android-latest` release also works — it just can't run CLI tools.)
+- **macOS / Linux:** `./scripts/gofindme.sh` from a clone.
+- **Windows:** `run-windows.bat` from a clone (it now `git pull`s on launch). For a no-Python option,
+  use the packaged `.exe` from the `desktop-latest` release (update it by re-downloading).
+
+Each launcher checks for updates on start, so opening it always runs the latest version.
+
 ---
 
 ## Architecture
