@@ -30,9 +30,9 @@ def main() -> None:
     os.environ.setdefault("GOFINDME_DB", str(data / "gofindme.db"))
     os.environ.setdefault("GOFINDME_UPLOADS_DIR", str(data / "uploads"))
     os.environ.setdefault("GOFINDME_BIND", "127.0.0.1")
-    # A frozen build has no bundled Python/pip, so in-app tool install can't work
-    # (sys.executable is the app itself). Disable it; installed tools on PATH still run.
-    os.environ.setdefault("GOFINDME_ALLOW_TOOL_MGMT", "0")
+    # Tool install/update is allowed: the manager uses your system Python/Go (not
+    # the frozen exe — see app.tools._pip), and installed tools are detected from
+    # PATH + the Python/Go script dirs (see app.tools._extra_bin_dirs).
     port = int(os.environ.get("GOFINDME_PORT", "8000"))
 
     # Imported after env is set so app.config picks up the data paths.

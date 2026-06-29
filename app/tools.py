@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -180,9 +181,93 @@ def get_spec(name: str) -> ToolSpec | None:
     return registry().get(name)
 
 
+# --- homepage + API-key links shown next to each tool ---
+TOOL_URLS = {
+    "sherlock": "https://github.com/sherlock-project/sherlock",
+    "maigret": "https://github.com/soxoj/maigret",
+    "blackbird": "https://github.com/p1ngul1n0/blackbird",
+    "nexfil": "https://github.com/thewhiteh4t/nexfil",
+    "holehe": "https://github.com/megadose/holehe",
+    "h8mail": "https://github.com/khast3x/h8mail",
+    "ghunt": "https://github.com/mxrch/GHunt",
+    "phoneinfoga": "https://github.com/sundowndev/phoneinfoga",
+    "subfinder": "https://github.com/projectdiscovery/subfinder",
+    "amass": "https://github.com/owasp-amass/amass",
+    "findomain": "https://github.com/Findomain/Findomain",
+    "assetfinder": "https://github.com/tomnomnom/assetfinder",
+    "theHarvester": "https://github.com/laramies/theHarvester",
+    "gau": "https://github.com/lc/gau",
+    "waybackurls": "https://github.com/tomnomnom/waybackurls",
+    "katana": "https://github.com/projectdiscovery/katana",
+    "hakrawler": "https://github.com/hakluke/hakrawler",
+    "waymore": "https://github.com/xnl-h4ck3r/waymore",
+    "bbot": "https://github.com/blacklanternsecurity/bbot",
+    "shodan-cli": "https://github.com/achillean/shodan-python",
+    "exiftool": "https://exiftool.org/",
+    "mat2": "https://0xacab.org/jvoisin/mat2",
+    "spiderfoot": "https://github.com/smicallef/spiderfoot",
+    "recon-ng": "https://github.com/lanmaster53/recon-ng",
+    "maltego": "https://www.maltego.com/",
+    "osmedeus": "https://github.com/j3ssie/osmedeus",
+    "theharvester-foca": "https://github.com/ElevenPaths/FOCA",
+    "moriarty": "https://github.com/AzizKpln/Moriarty-Project",
+}
+# Tools that consume an API key → link straight to where that key is obtained.
+TOOL_KEY_URLS = {
+    "shodan-cli": "https://account.shodan.io",
+    "ghunt": "https://github.com/mxrch/GHunt/wiki",          # uses Google auth cookies
+    "h8mail": "https://github.com/khast3x/h8mail#-getting-started",  # API keys via config
+    "theHarvester": "https://github.com/laramies/theHarvester/wiki/Installation#api-keys",
+}
+
 # --- availability (cached briefly) ---
 _avail_cache: dict[str, tuple[float, str | None]] = {}
 _AVAIL_TTL = 20.0
+_extra_dirs_cache: list[str] | None = None
+
+_SCRIPTS_SNIPPET = (
+    "import sysconfig, os, json\n"
+    "p = set()\n"
+    "p.add(sysconfig.get_path('scripts'))\n"
+    "try:\n"
+    "    p.add(sysconfig.get_path('scripts', os.name + '_user'))\n"
+    "except Exception:\n"
+    "    pass\n"
+    "print(json.dumps([x for x in p if x]))\n"
+)
+
+
+def _system_python() -> str | None:
+    if getattr(sys, "frozen", False):
+        return shutil.which("python3") or shutil.which("python")
+    return sys.executable
+
+
+def _extra_bin_dirs() -> list[str]:
+    """Extra dirs to search for installed tools: Go bin + Python script dirs
+    (where pip/`go install` drop console scripts that may not be on PATH)."""
+    global _extra_dirs_cache
+    if _extra_dirs_cache is not None:
+        return _extra_dirs_cache
+    dirs: list[str] = []
+    home = os.path.expanduser("~")
+    for d in (os.environ.get("GOBIN"),
+              os.path.join(os.environ.get("GOPATH", os.path.join(home, "go")), "bin"),
+              os.path.join(home, "go", "bin")):
+        if d and d not in dirs:
+            dirs.append(d)
+    py = _system_python()
+    if py:
+        try:
+            out = subprocess.run([py, "-c", _SCRIPTS_SNIPPET], capture_output=True,
+                                 text=True, timeout=12)
+            for d in json.loads(out.stdout or "[]"):
+                if d and d not in dirs:
+                    dirs.append(d)
+        except Exception:
+            pass
+    _extra_dirs_cache = [d for d in dirs if os.path.isdir(d)]
+    return _extra_dirs_cache
 
 
 def resolve_bin(bin_name: str) -> str | None:
@@ -191,6 +276,11 @@ def resolve_bin(bin_name: str) -> str | None:
     if hit and now - hit[0] < _AVAIL_TTL:
         return hit[1]
     path = shutil.which(bin_name)
+    if not path:
+        extra = _extra_bin_dirs()
+        if extra:
+            search = os.pathsep.join(extra + [os.environ.get("PATH", "")])
+            path = shutil.which(bin_name, path=search)
     _avail_cache[bin_name] = (now, path)
     return path
 
@@ -200,6 +290,8 @@ def tool_view(spec: ToolSpec) -> dict:
     d = spec.public()
     d["available"] = path is not None
     d["path"] = path
+    d["url"] = TOOL_URLS.get(spec.name, "")
+    d["key_url"] = TOOL_KEY_URLS.get(spec.name, "")
     return d
 
 
@@ -415,8 +507,11 @@ def version_argv(spec: ToolSpec) -> list[str] | None:
 
 
 def manager_available(method: str) -> bool:
+    # pip works via the running interpreter, except in a frozen build where it
+    # needs a separate system Python (see _pip()).
+    pip_ok = _system_python() is not None if getattr(sys, "frozen", False) else True
     return {
-        "pip": True,
+        "pip": pip_ok,
         "pipx": shutil.which("pipx") is not None,
         "npm": shutil.which("npm") is not None,
         "go": shutil.which("go") is not None,

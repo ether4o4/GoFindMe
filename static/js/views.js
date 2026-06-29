@@ -198,6 +198,12 @@ function toolCard(t, mgr) {
     t.notes ? el("div", { class: "muted", text: t.notes }) : null,
   ]);
   const actions = el("div", { class: "row", style: "margin-top:10px" });
+  if (t.url)
+    actions.append(el("a", { class: "btn sm ghost", href: t.url, target: "_blank",
+                             rel: "noopener noreferrer", text: "Home ↗" }));
+  if (t.key_url)
+    actions.append(el("a", { class: "btn sm ghost", href: t.key_url, target: "_blank",
+                             rel: "noopener noreferrer", text: "Get key ↗" }));
   if (t.available)
     actions.append(button("Version", { cls: "sm ghost", onclick: () => manage(t.name, "version") }));
   if (mgr.allowed && t.install_method !== "none" && mgr.available[t.install_method]) {
@@ -397,8 +403,9 @@ async function settingsView(root) {
     el("div", { text: `Data folder: ${h.data_dir || "—"}` }),
     el("div", { class: "small muted", text: `Database file: ${h.db_path || "—"} (your data persists here between runs)` }),
     h.packaged ? el("div", { class: "small muted", style: "margin-top:8px",
-      text: "Packaged app: in-app tool install/update is off (no bundled Python). Tools already on " +
-            "your system PATH are detected and run; for one-click installs, run the Python/server version." }) : null,
+      text: "Packaged app: tool installs use your system Python/Go (install Python from python.org and " +
+            "Go from go.dev to enable them). Installed tools are detected from your PATH and the Python/Go " +
+            "script dirs. The API providers need no tools at all — just keys." }) : null,
     el("div", { class: "small muted", style: "margin-top:8px",
       html: 'Legacy single-file launcher is preserved at <a href="/legacy" target="_blank">/legacy</a>.' }),
   ]));
