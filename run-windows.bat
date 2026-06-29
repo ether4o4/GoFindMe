@@ -7,6 +7,13 @@ cd /d "%~dp0"
 
 where py >nul 2>nul && (set "PY=py -3") || (set "PY=python")
 
+if exist ".git" (
+  where git >nul 2>nul && (
+    echo Checking for updates...
+    git pull --ff-only
+  )
+)
+
 if not exist ".venv\Scripts\activate.bat" (
   echo Creating virtual environment...
   %PY% -m venv .venv
