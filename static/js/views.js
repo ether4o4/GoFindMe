@@ -15,6 +15,19 @@ async function dashboard(root) {
       "scoped engagements — and respect each service's terms." }),
   ]));
 
+  root.append(el("div", { class: "guide" }, [
+    el("h3", {}, ["🚀 Getting started — 3 steps"]),
+    el("ol", {}, [
+      el("li", { html: "Type a <b>target</b> below (username, email, domain, IP, hash, phone, or BTC address) and tap <b>Search&nbsp;All</b>." }),
+      el("li", { html: "Results stream in from installed <b>tools</b> and <b>providers</b>. <b>crt.sh works with no key</b>, so you can try it right now." }),
+      el("li", { html: "Want more sources? Open the <b>Vault</b> and paste API keys — every provider has a <b>“Get key ↗”</b> link straight to its signup page." }),
+    ]),
+    el("div", { class: "row" }, [
+      button("Open Vault →", { cls: "sm", onclick: () => (location.hash = "#/vault") }),
+      button("Browse tools →", { cls: "sm ghost", onclick: () => (location.hash = "#/tools") }),
+    ]),
+  ]));
+
   const search = el("div", { class: "row" }, [
     el("input", { placeholder: "Search a target — username, email, phone, domain, IP, hash…",
                   id: "dashq", style: "flex:1;min-width:240px" }),
@@ -62,7 +75,14 @@ async function searchView(root) {
 
   q.addEventListener("input", debounce(updateDetect, 250));
   q.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
-  root.append(el("div", { class: "row" }, [q, typeSel, run]), detected, results);
+  const hint = el("div", { class: "viewhint", html:
+    "Type any target — GoFindMe auto-detects what it is and runs every <b>installed tool</b> + " +
+    "<b>configured provider</b> for that type. No setup? Tap an example (crt.sh needs no key):" });
+  const examples = [["example.com", "domain"], ["8.8.8.8", "ip"],
+                    ["johndoe", "username"], ["test@example.com", "email"]];
+  const chips = el("div", { class: "chips" }, examples.map(([val]) =>
+    el("span", { class: "chip", text: val, onclick: () => { q.value = val; doSearch(); } })));
+  root.append(el("div", { class: "row" }, [q, typeSel, run]), hint, chips, detected, results);
 
   async function updateDetect() {
     const t = q.value.trim();
@@ -343,6 +363,8 @@ async function testProvider(name) {
 /* ============================== Jobs =========================== */
 async function jobsView(root) {
   root.append(el("h2", { text: "Recent jobs" }));
+  root.append(el("div", { class: "viewhint", text:
+    "Every tool run and provider lookup appears here with live status. Tap a row to see its output." }));
   const wrap = el("div");
   root.append(wrap);
   async function load() {
@@ -382,6 +404,8 @@ async function showJob(id) {
 /* ============================== Logs =========================== */
 async function logsView(root) {
   root.append(el("h2", { text: "Audit & activity logs" }));
+  root.append(el("div", { class: "viewhint", text:
+    "Audit trail of logins, vault unlocks, and every tool/provider call. API keys are never logged." }));
   const rows = await api.get("/api/logs?limit=300");
   if (!rows.length) return root.append(el("div", { class: "empty", text: "No logs yet." }));
   const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [
@@ -421,6 +445,7 @@ async function settingsView(root) {
 function crudView(opts) {
   return async function (root) {
     root.append(el("h2", { text: opts.title }));
+    if (opts.hint) root.append(el("div", { class: "viewhint", text: opts.hint }));
     const formHost = el("div");
     const listHost = el("div");
     root.append(formHost, listHost);
@@ -477,6 +502,7 @@ function fmt(v) { return v == null ? "" : String(v); }
 
 const identityView = crudView({
   title: "Identity — emails, usernames, handles", path: "/api/identity",
+  hint: "Save the emails, usernames, and handles you're investigating (or your own). Stored on the server and shared across your devices.",
   columns: [{ key: "kind", label: "kind" }, { key: "value", label: "value" }, { key: "label", label: "label" }],
   fields: [
     { key: "kind", label: "Kind", type: "select", options: ["email", "username", "handle", "realname", "phone", "domain"] },
@@ -485,6 +511,7 @@ const identityView = crudView({
 });
 const accountsView = crudView({
   title: "Accounts & recovery status", path: "/api/accounts",
+  hint: "Track accounts you've found and their recovery status (2FA, recovery email/phone) — useful for auditing your own footprint.",
   columns: [{ key: "service", label: "service" }, { key: "status", label: "status" },
             { key: "has_2fa", label: "2FA" }, { key: "recovery_status", label: "recovery" }],
   fields: [
@@ -498,6 +525,7 @@ const accountsView = crudView({
 });
 const timelineView = crudView({
   title: "Digital timeline", path: "/api/timeline",
+  hint: "Build a timeline of accounts and devices over the years to reconstruct a footprint.",
   columns: [{ key: "occurred_at", label: "when" }, { key: "event_type", label: "type" }, { key: "title", label: "title" }],
   fields: [
     { key: "event_type", label: "Type", type: "select", options: ["account_created", "device_added", "breach", "note"] },
@@ -507,6 +535,7 @@ const timelineView = crudView({
 });
 const notesView = crudView({
   title: "Case notes", path: "/api/notes",
+  hint: "Free-form notes. Everything here is included when you export a report.",
   columns: [{ key: "body", label: "note" }, { key: "created_at", label: "created" }],
   fields: [{ key: "body", label: "Note", type: "textarea" }],
 });
