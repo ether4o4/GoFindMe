@@ -100,10 +100,29 @@ details>.body{padding:0 13px 13px}
 .empty{color:var(--muted);font-size:13.5px;padding:26px 0}
 .field{display:flex;flex-direction:column;gap:5px}
 
+/* onboarding / guidance */
+.guide{background:linear-gradient(180deg,rgba(94,209,160,.08),var(--surface));border:1px solid rgba(94,209,160,.3);border-radius:var(--radius);padding:15px 16px;margin-bottom:16px}
+.guide h3{font-size:14.5px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.guide ol{margin:0 0 10px 20px;font-size:13.5px;line-height:1.7}
+.guide ol b{color:var(--accent)}
+.guide .row{margin-top:4px}
+.viewhint{color:var(--muted);font-size:12.5px;margin:2px 0 14px;line-height:1.5}
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 4px}
+.chip{cursor:pointer;font-size:12px;font-weight:620;padding:7px 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface2);color:var(--muted)}
+.chip:hover{border-color:var(--accent);color:var(--text)}
+
 @media(max-width:768px){
   main{padding:16px 12px 60px}
   .bar{padding:10px 12px}
-  nav.tabs{padding:0 8px 6px}
+  /* tabs become one swipeable row instead of stacking into many lines */
+  nav.tabs{padding:0 10px 6px;flex-wrap:nowrap;overflow-x:auto;gap:0;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  nav.tabs::-webkit-scrollbar{display:none}
+  .tab{flex:0 0 auto;padding:11px 14px;font-size:14px}
   .grid{grid-template-columns:1fr}
   th:nth-child(n+4),td:nth-child(n+4){display:none}
+  /* bigger touch targets */
+  .btn{padding:12px 16px}
+  .btn.sm{padding:9px 12px;font-size:12.5px}
+  input,select,textarea{font-size:16px}  /* 16px stops iOS zoom-on-focus */
+  .src .act,.card .row{flex-wrap:wrap}
 }

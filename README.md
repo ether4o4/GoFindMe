@@ -86,6 +86,24 @@ These pull the latest code, ensure dependencies, start the server, and open the 
 
 Each launcher checks for updates on start, so opening it always runs the latest version.
 
+### Deploy on a VPS — run the tools there, control it from your phone (recommended)
+
+This is the best setup: the VPS (a full Linux box) installs and runs **all** the CLI tools, and
+your phone just opens the dashboard in a browser. The phone gets the VPS's full power, and your
+data lives in one place.
+
+```bash
+sudo apt-get install -y git
+git clone https://github.com/ether4o4/GoFindMe && cd GoFindMe
+sudo bash scripts/install-vps.sh
+```
+
+The installer sets up the server + common OSINT tools (Sherlock, Maigret, Holehe, theHarvester,
+and Go tools if Go is present), runs it as a `systemd` service on `127.0.0.1`, and prints how to
+reach it from your phone. **Recommended: Tailscale** — `sudo tailscale serve --bg 8000` gives you a
+private `https://…ts.net` URL with no open ports and no domain. (Or Caddy for a public HTTPS domain.)
+Don't expose the port to the public internet without TLS.
+
 ---
 
 ## Architecture
