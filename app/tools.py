@@ -239,7 +239,9 @@ _SCRIPTS_SNIPPET = (
 
 def _system_python() -> str | None:
     if getattr(sys, "frozen", False):
-        return shutil.which("python3") or shutil.which("python")
+        # `py` is the Windows Python launcher (`py -m pip ...` works); try it last.
+        return (shutil.which("python3") or shutil.which("python")
+                or shutil.which("py"))
     return sys.executable
 
 
@@ -305,17 +307,33 @@ def list_tools() -> list[dict]:
 
 OutputCb = Callable[[str], Awaitable[None] | None]
 
-# Minimal env for tool RUN jobs — no secrets, no proxy.
-_RUN_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "GOPATH", "GOBIN")
-# Manage jobs additionally need proxy + go module env to fetch packages.
-_MGMT_ENV_KEYS = _RUN_ENV_KEYS + (
-    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
-    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "GOPROXY", "GOMODCACHE", "GOCACHE", "PIP_INDEX_URL",
+# Child processes inherit the FULL parent environment so they actually work on
+# every OS. A stripped allowlist looks safe on Linux but breaks Windows badly:
+# pip and every Python-based tool (sherlock/maigret/holehe/...) need SYSTEMROOT,
+# TEMP/TMP, APPDATA/LOCALAPPDATA, USERPROFILE and PATHEXT just to start a process
+# and open a TLS socket. Without them you get cryptic "could not create temporary
+# directory" / download failures on every single install and run.
+#
+# This is safe: vault secrets live in the SQLite DB and are decrypted on demand
+# per provider call — they are NEVER placed in os.environ, so nothing sensitive
+# is exposed to a child here.
+#
+# For tool RUN jobs (third-party OSINT tools) we still drop our own outbound proxy
+# and CA overrides, so those tools aren't silently routed through — or made to
+# trust — our internal proxy/cert. MANAGE jobs (pip/go/git) KEEP the proxy + CA so
+# they can fetch packages through it.
+_PROXY_CA_KEYS = (
+    "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "GOFINDME_CA_BUNDLE",
 )
 
 
-def _env(keys: tuple[str, ...]) -> dict[str, str]:
-    return {k: os.environ[k] for k in keys if k in os.environ}
+def run_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for k in _PROXY_CA_KEYS:
+        env.pop(k, None)
+    return env
 
 
 async def spawn_stream(
@@ -355,7 +373,7 @@ async def spawn_stream(
             stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=env or _env(_RUN_ENV_KEYS),
+            env=env or run_env(),
             cwd=cwd,
         )
     except FileNotFoundError:
@@ -521,7 +539,9 @@ def manager_available(method: str) -> bool:
 
 
 def mgmt_env() -> dict[str, str]:
-    return _env(_MGMT_ENV_KEYS)
+    # Full environment so pip/go/git behave exactly as they do in the user's own
+    # terminal (TEMP/APPDATA/SYSTEMROOT for Windows, proxy + CA to fetch packages).
+    return dict(os.environ)
 
 
 # ---------------------------------------------------------------------------
