@@ -59,3 +59,49 @@ def test_build_tool_argv_missing_bin():
                           "{bin} {target}")
     with pytest.raises(FileNotFoundError):
         tools.build_tool_argv(spec, "example.com")
+
+
+def _git_spec(name="gittool", entry="gittool.py"):
+    return tools.ToolSpec(name, name, ["username"], ["username"], "{bin} -u {target}",
+                          install_method="git",
+                          install_ref="https://github.com/example/gittool",
+                          git_entry=entry)
+
+
+def test_install_argv_git_uses_python_bootstrap():
+    spec = _git_spec()
+    argv, _ = tools.install_argv(spec, update=False)
+    # Runs under a Python interpreter with the inlined bootstrap; ref + dest passed
+    # as discrete argv elements (no shell), dest ends in the tool name.
+    assert argv[1] == "-c"
+    assert "git" in argv[2] and "clone" in argv[2]  # bootstrap source text
+    assert argv[3] == "https://github.com/example/gittool"
+    assert argv[4].replace("\\", "/").endswith("/tools/gittool")
+
+
+def test_git_tool_not_installed_before_clone():
+    spec = _git_spec("uncloned", "uncloned.py")
+    assert tools.resolve_spec(spec) is None
+    assert tools.tool_view(spec)["available"] is False
+    with pytest.raises(FileNotFoundError):
+        tools.build_tool_argv(spec, "someuser")
+
+
+def test_git_tool_detected_and_run_after_clone(tmp_path_factory):
+    import os
+    spec = _git_spec("clonedtool", "clonedtool.py")
+    dest = tools.TOOLS_DIR / spec.name
+    dest.mkdir(parents=True, exist_ok=True)
+    entry = dest / spec.git_entry
+    entry.write_text("print('hi')\n")
+    try:
+        assert tools.resolve_spec(spec) == str(entry)
+        assert tools.tool_view(spec)["available"] is True
+        argv, stdin = tools.build_tool_argv(spec, "someuser")
+        # Prepended with the system Python, then the entry script and its args.
+        assert argv[0] == tools._system_python()
+        assert argv[1] == str(entry)
+        assert argv[-2:] == ["-u", "someuser"]
+    finally:
+        import shutil
+        shutil.rmtree(dest, ignore_errors=True)

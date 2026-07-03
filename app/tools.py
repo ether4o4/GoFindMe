@@ -41,6 +41,7 @@ class ToolSpec:
     interactive: bool = False          # GUI/REPL — never spawned, copy-command only
     install_method: str = "none"       # pip|pipx|go|git|npm|none
     install_ref: str | None = None
+    git_entry: str | None = None       # for git tools: python entry script in the clone
     version_cmd: str | None = None     # template, e.g. "{bin} --version"
     stdin_template: str | None = None  # if set, target is piped to stdin, not argv
     notes: str = ""
@@ -64,10 +65,13 @@ BUILTIN: list[ToolSpec] = [
     ToolSpec("blackbird", "blackbird", ["username", "email"], ["username", "email"],
              "{bin} -u {target}", 240, install_method="git",
              install_ref="https://github.com/p1ngul1n0/blackbird",
-             notes="Cloned to data/tools; run with its own python entrypoint."),
+             git_entry="blackbird.py",
+             notes="Cloned to data/tools; run with the system Python entrypoint."),
     ToolSpec("nexfil", "nexfil", ["username"], ["username"],
              "{bin} -u {target}", 240, install_method="git",
-             install_ref="https://github.com/thewhiteh4t/nexfil"),
+             install_ref="https://github.com/thewhiteh4t/nexfil",
+             git_entry="nexfil.py",
+             notes="Cloned to data/tools; run with the system Python entrypoint."),
     # --- email ---
     ToolSpec("holehe", "holehe", ["email"], ["email"],
              "{bin} --only-used {target}", 180, install_method="pip", install_ref="holehe"),
@@ -287,8 +291,24 @@ def resolve_bin(bin_name: str) -> str | None:
     return path
 
 
+def _git_entry_path(spec: ToolSpec) -> str | None:
+    """For a git-cloned tool, the python entry script inside the clone, if present."""
+    if spec.install_method != "git" or not spec.git_entry:
+        return None
+    p = TOOLS_DIR / spec.name / spec.git_entry
+    return str(p) if p.is_file() else None
+
+
+def resolve_spec(spec: ToolSpec) -> str | None:
+    """Path used to both detect and run a tool. Git-cloned tools resolve to their
+    entry script in TOOLS_DIR; every other tool resolves a binary on PATH."""
+    if spec.install_method == "git" and spec.git_entry:
+        return _git_entry_path(spec)
+    return resolve_bin(spec.bin)
+
+
 def tool_view(spec: ToolSpec) -> dict:
-    path = resolve_bin(spec.bin)
+    path = resolve_spec(spec)
     d = spec.public()
     d["available"] = path is not None
     d["path"] = path
@@ -429,8 +449,8 @@ def _kill(proc: asyncio.subprocess.Process) -> None:
 
 def build_tool_argv(spec: ToolSpec, target: str) -> tuple[list[str], str | None]:
     """Validate target for the spec and return (argv, stdin)."""
-    bin_path = resolve_bin(spec.bin)
-    if not bin_path:
+    exe = resolve_spec(spec)
+    if not exe:
         raise FileNotFoundError(f"{spec.bin} is not installed")
     if spec.interactive or not spec.auto_runnable:
         raise PermissionError(f"{spec.name} is interactive/GUI and is not auto-run")
@@ -441,7 +461,14 @@ def build_tool_argv(spec: ToolSpec, target: str) -> tuple[list[str], str | None]
     stdin = None
     if spec.stdin_template:
         stdin = spec.stdin_template.replace("{target}", target)
-    argv = build_argv(spec.run_template, bin_path, target)
+    argv = build_argv(spec.run_template, exe, target)
+    if spec.install_method == "git" and spec.git_entry:
+        # {bin} resolved to the cloned .py entry script — run it with the system
+        # Python (the frozen exe can't import the tool's own deps).
+        py = _system_python()
+        if not py:
+            raise FileNotFoundError("system Python not found to run this tool")
+        argv = [py] + argv
     return argv, stdin
 
 
@@ -480,9 +507,16 @@ def _pip() -> list[str]:
     return [exe, "-m", "pip"]
 
 
-def install_argv(spec: ToolSpec, update: bool) -> tuple[list[str], str | None]:
+def install_argv(spec: ToolSpec, update: bool,
+                 for_run: bool = False) -> tuple[list[str], str | None]:
     """Return (argv, cwd) for an install/update of a tool. Raises ManageError if
-    the method or ref is not allowlisted/valid."""
+    the method or ref is not allowlisted/valid.
+
+    ``for_run`` must be True only when the command is about to be executed (the
+    job runner) — it permits filesystem prep such as clearing a stale partial
+    clone. It stays False on the validation path (custom-tool upsert) so no
+    directory is ever mutated just by validating a ref.
+    """
     m = spec.install_method
     ref = spec.install_ref or ""
     if m == "none":
@@ -506,20 +540,51 @@ def install_argv(spec: ToolSpec, update: bool) -> tuple[list[str], str | None]:
         return ["go", "install", ref], None
     if m == "git":
         dest = TOOLS_DIR / spec.name
-        if update and dest.exists():
-            return ["git", "-C", str(dest), "pull", "--ff-only"], None
-        TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-        return ["git", "clone", "--depth", "1", ref, str(dest)], None
+        py = _system_python()
+        if for_run and not py:
+            raise ManageError("Installing a git-based tool needs a system Python on PATH.")
+        # A tiny Python bootstrap does the whole install in one streamed job:
+        # clone (or fast-forward), self-heal a partial clone, then pip-install the
+        # tool's own requirements.txt so it can actually run. No shell involved —
+        # ref is allowlisted above and passed as a discrete argv element.
+        return [py or "python", "-c", _GIT_BOOTSTRAP, ref, str(dest)], None
     raise ManageError(f"Unknown install method: {m}")
 
 
+# Runs under the system Python; clones/updates a tool repo and installs its deps.
+_GIT_BOOTSTRAP = (
+    "import os, sys, subprocess, shutil\n"
+    "ref, dest = sys.argv[1], sys.argv[2]\n"
+    "def run(*a):\n"
+    "    print('+ ' + ' '.join(a), flush=True)\n"
+    "    subprocess.run(list(a), check=True)\n"
+    "if os.path.isdir(os.path.join(dest, '.git')):\n"
+    "    run('git', '-C', dest, 'pull', '--ff-only')\n"
+    "else:\n"
+    "    if os.path.exists(dest):\n"
+    "        shutil.rmtree(dest, ignore_errors=True)\n"
+    "    os.makedirs(os.path.dirname(dest), exist_ok=True)\n"
+    "    run('git', 'clone', '--depth', '1', ref, dest)\n"
+    "req = os.path.join(dest, 'requirements.txt')\n"
+    "if os.path.isfile(req):\n"
+    "    run(sys.executable, '-m', 'pip', 'install', '-r', req)\n"
+    "print('OK installed to ' + dest, flush=True)\n"
+)
+
+
 def version_argv(spec: ToolSpec) -> list[str] | None:
-    bin_path = resolve_bin(spec.bin)
-    if not bin_path:
+    exe = resolve_spec(spec)
+    if not exe:
         return None
+    if spec.install_method == "git" and spec.git_entry:
+        # Report the cloned commit rather than run the tool with no args.
+        git = shutil.which("git")
+        if not git:
+            return None
+        return [git, "-C", str(TOOLS_DIR / spec.name), "rev-parse", "--short", "HEAD"]
     tmpl = spec.version_cmd or "{bin} --version"
     try:
-        return build_argv(tmpl, bin_path, "")
+        return build_argv(tmpl, exe, "")
     except ValidationError:
         return None
 

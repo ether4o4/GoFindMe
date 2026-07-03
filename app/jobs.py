@@ -166,7 +166,8 @@ class JobQueue:
                         await self._finish(jid, "error", None, "tool_not_installed")
                         return
                 else:
-                    argv, _cwd = tools.install_argv(spec, update=(action == "update"))
+                    argv, _cwd = tools.install_argv(spec, update=(action == "update"),
+                                                    for_run=True)
                     if not tools.manager_available(spec.install_method):
                         await self._finish(jid, "error", None,
                                            f"{spec.install_method} not available on this host")
