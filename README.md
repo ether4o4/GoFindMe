@@ -1,14 +1,31 @@
-# GoFindMe
+# GoFindMe — Investigations Console
 
-A **self-hosted OSINT / digital-footprint console**. GoFindMe runs allowlisted recon tools,
-queries provider APIs **server-side** (no browser-CORS wall), aggregates the output in one
-dashboard, and stores your findings + a personal-footprint dataset in a single database that every
-device — desktop and phone — shares. Run it once on an always-on machine and reach it from anywhere
-on your private network.
+A **self-hosted OSINT / DFIR investigations platform**. An investigator enters a target, and
+GoFindMe opens a **case**, runs every available recon tool and data provider against it
+(server-side, no browser-CORS wall), auto-builds a **relationship graph**, and organizes everything
+into a **court-ready report** backed by a **tamper-evident audit trail** — all on infrastructure you
+control. Simple enough to run from one search box; deep enough to stand up in procurement review.
 
 > ⚠️ **Authorized use only.** GoFindMe executes reconnaissance tools and queries third-party APIs on
-> your behalf. Use it to investigate **your own** digital footprint or targets you are explicitly
-> authorized to investigate, and follow each upstream service's terms of use.
+> your behalf. Use it only for investigations you are legally authorized to conduct, and follow each
+> upstream service's terms of use.
+
+### At a glance
+
+- **One-click Investigate** → auto-opens a case (`GFM-2026-000N`) and runs tools + providers scoped
+  to it, with live output.
+- **Case management** — subject, examiner, legal authority, status/priority, scoped evidence.
+- **Relationship graph** — an interactive, self-contained link-analysis view auto-derived from real
+  findings and tracked accounts (no external JS; CSP-safe).
+- **Court-ready reporting** — a branded, printable report with case metadata, findings provenance,
+  timeline, methodology, and a **chain-of-custody integrity block** (verified audit-chain hash +
+  document fingerprint).
+- **Tamper-evident audit trail** — an append-only SHA-256 hash chain with one-click integrity
+  verification.
+- **Analytics** — live, computed metrics (hit rate, findings by source/type, 2FA gaps).
+
+**Procurement docs:** [Security whitepaper](docs/SECURITY.md) ·
+[Deployment & administration](docs/DEPLOYMENT.md) · [Data handling & privacy](docs/DATA_HANDLING.md)
 
 It evolved from a single static `index.html` launcher (still preserved — see
 [Legacy launcher](#legacy-launcher)) into a real backend app, because a browser page cannot run

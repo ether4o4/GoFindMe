@@ -22,16 +22,17 @@ def detect(raw: str) -> dict:
 
 
 def _write_finding(job_id: str | None, kind: str, name: str, target: str, ttype: str,
-                   summary: dict, raw) -> None:
+                   summary: dict, raw, case_id: int | None = None) -> None:
     db.execute(
         "INSERT INTO findings (job_id, source_kind, source_name, target, target_type, "
-        "summary, raw, created_at) VALUES (?,?,?,?,?,?,?,?)",
-        (job_id, kind, name, target, ttype, jdumps(summary), jdumps(raw, RAW_CAP), now_iso()),
+        "summary, raw, case_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (job_id, kind, name, target, ttype, jdumps(summary), jdumps(raw, RAW_CAP),
+         case_id, now_iso()),
     )
 
 
 async def run_provider(provider: prov.Provider, target: str, ttype: str,
-                       parent: str | None = None) -> dict:
+                       parent: str | None = None, case_id: int | None = None) -> dict:
     """Run one provider lookup, persist a job row + finding, return the result."""
     key = None
     if provider.requires_key or provider.vault_key:
@@ -54,19 +55,20 @@ async def run_provider(provider: prov.Provider, target: str, ttype: str,
     status = "done" if res.ok else "error"
     short = res.error or ("found" if res.summary.get("found") else "no result")
     job_id = jobs.get_queue().record_provider_job(provider.name, target, ttype, status, short, parent)
-    _write_finding(job_id, "provider", provider.name, target, ttype, res.summary, res.raw)
+    _write_finding(job_id, "provider", provider.name, target, ttype, res.summary, res.raw, case_id)
     audit("info", "provider", "lookup", provider=provider.name, target_type=ttype, ok=res.ok)
     d = res.to_dict()
     d["job_id"] = job_id
     return d
 
 
-async def _providers_bg(target: str, ttype: str, provs: list[prov.Provider], parent: str) -> None:
-    await asyncio.gather(*[run_provider(p, target, ttype, parent) for p in provs],
+async def _providers_bg(target: str, ttype: str, provs: list[prov.Provider], parent: str,
+                        case_id: int | None = None) -> None:
+    await asyncio.gather(*[run_provider(p, target, ttype, parent, case_id) for p in provs],
                          return_exceptions=True)
 
 
-def search_all(target: str, ttype: str | None) -> dict:
+def search_all(target: str, ttype: str | None, case_id: int | None = None) -> dict:
     target = (target or "").strip()
     if not ttype:
         cands = detect_types(target)
@@ -94,17 +96,24 @@ def search_all(target: str, ttype: str | None) -> dict:
     selected = [p for p in prov.providers_for_type(ttype)
                 if (not p.requires_key) or (p.vault_key in configured)]
     provider_names = [p.name for p in selected]
-    prov_task = q.track(_providers_bg(target, ttype, selected, parent)) if selected else None
+    prov_task = q.track(_providers_bg(target, ttype, selected, parent, case_id)) if selected else None
     # Finalize the parent once children + providers complete (so it doesn't sit
     # 'queued' forever and any parent SSE stream closes).
     q.track(q.finalize_parent(parent, [tj["job_id"] for tj in tool_jobs], prov_task))
 
+    if case_id:
+        try:
+            from . import cases
+            cases.touch(case_id)
+        except Exception:
+            pass
     audit("audit", "tool", "search-all", target_type=ttype, tools=len(tool_jobs),
-          providers=len(provider_names))
+          providers=len(provider_names), case_id=case_id)
     return {
         "parent_job_id": parent,
         "target": target,
         "type": ttype,
+        "case_id": case_id,
         "tool_jobs": tool_jobs,
         "tools_skipped": skipped,
         "providers": provider_names,

@@ -26,10 +26,31 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added to pre-existing tables after their original CREATE. `CREATE TABLE
+# IF NOT EXISTS` never alters an existing table, so new columns need an explicit,
+# idempotent ALTER guarded by PRAGMA table_info.
+_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("findings", "case_id", "INTEGER"),
+    ("notes", "case_id", "INTEGER"),
+    ("timeline_events", "case_id", "INTEGER"),
+    ("accounts", "case_id", "INTEGER"),
+    ("identity_items", "case_id", "INTEGER"),
+    ("graph_nodes", "case_id", "INTEGER"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, decl in _MIGRATIONS:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if cols and column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     """Apply the schema idempotently and reconcile stale jobs from a prior run."""
     with _connect() as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         # Any job left 'running' or 'queued' when the process died is unreachable now.
         conn.execute(
             "UPDATE jobs SET status='error', error='server_restart', "

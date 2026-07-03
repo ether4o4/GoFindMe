@@ -17,8 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, db, jobs, security
 from .config import resource_base, settings
 from .vault import vault
-from . import (routes_auth, routes_data, routes_jobs, routes_orchestrate,
-               routes_providers, routes_reports, routes_tools, routes_vault)
+from . import (routes_audit, routes_auth, routes_cases, routes_data, routes_jobs,
+               routes_orchestrate, routes_providers, routes_reports, routes_tools,
+               routes_vault)
 
 ROOT = resource_base()
 STATIC = ROOT / "static"
@@ -49,8 +50,12 @@ app = FastAPI(title="GoFindMe", version=__version__, lifespan=lifespan)
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
-    is_legacy = request.url.path.startswith("/legacy")
-    response.headers["Content-Security-Policy"] = _LEGACY_CSP if is_legacy else _STRICT_CSP
+    # The legacy launcher and the standalone printable case report are
+    # self-contained HTML documents that use inline script/style; relax CSP for
+    # those paths only. Everything else gets the strict policy.
+    path = request.url.path
+    relaxed = path.startswith("/legacy") or path.endswith("/report")
+    response.headers["Content-Security-Policy"] = _LEGACY_CSP if relaxed else _STRICT_CSP
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
@@ -58,7 +63,7 @@ async def security_headers(request: Request, call_next):
 
 
 for r in (routes_auth, routes_vault, routes_providers, routes_tools, routes_jobs,
-          routes_orchestrate, routes_data, routes_reports):
+          routes_orchestrate, routes_cases, routes_audit, routes_data, routes_reports):
     app.include_router(r.router)
 
 

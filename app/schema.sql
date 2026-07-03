@@ -151,6 +151,40 @@ CREATE TABLE IF NOT EXISTS findings (
   created_at  TEXT NOT NULL
 );
 
+-- ===================== v2: investigations / cases =====================
+-- A search rolls up into a Case. Findings, notes and timeline can be scoped to
+-- a case_id (added by migration for existing DBs; see db._migrate).
+CREATE TABLE IF NOT EXISTS cases (
+  id           INTEGER PRIMARY KEY,
+  ref          TEXT UNIQUE,               -- human case number, e.g. GFM-2026-0007
+  title        TEXT NOT NULL,
+  subject      TEXT,                       -- primary target/subject value
+  subject_type TEXT,                       -- username|email|domain|ip|...
+  status       TEXT NOT NULL DEFAULT 'open',    -- open|active|closed|archived
+  priority     TEXT NOT NULL DEFAULT 'normal',  -- low|normal|high|urgent
+  examiner     TEXT,                       -- who is running the investigation
+  authority    TEXT,                       -- legal authority / authorization reference
+  summary      TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
+
+-- Tamper-evident audit trail: an append-only hash chain. Each row's hash binds
+-- the previous row's hash, so any edit/deletion breaks the chain and is provable
+-- via /api/audit/verify. Never store secrets in detail.
+CREATE TABLE IF NOT EXISTS audit_chain (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         TEXT NOT NULL,
+  actor      TEXT,
+  action     TEXT NOT NULL,
+  category   TEXT,
+  detail     TEXT,                         -- JSON, never secrets
+  prev_hash  TEXT NOT NULL,
+  hash       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_chain(ts);
+
 CREATE INDEX IF NOT EXISTS idx_findings_target  ON findings(target, target_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_parent       ON jobs(parent_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created       ON jobs(created_at);

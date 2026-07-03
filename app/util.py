@@ -26,7 +26,11 @@ def strip_ansi(text: str) -> str:
 
 
 def audit(level: str, category: str, message: str, **meta: Any) -> None:
-    """Write a structured log row. Never include secrets in meta."""
+    """Write a structured log row. Never include secrets in meta.
+
+    Security-relevant levels (audit/warn/error) are also appended to the
+    tamper-evident hash chain (app.audit_chain) for a court-grade evidence trail.
+    """
     try:
         db.execute(
             "INSERT INTO logs (ts, level, category, message, meta) VALUES (?,?,?,?,?)",
@@ -35,6 +39,13 @@ def audit(level: str, category: str, message: str, **meta: Any) -> None:
     except Exception:
         # Logging must never break the request path.
         pass
+    if level in ("audit", "warn", "error"):
+        try:
+            from . import audit_chain  # lazy import avoids a circular dependency
+            audit_chain.record(message, actor=str(meta.get("username", "system")),
+                               category=category, **meta)
+        except Exception:
+            pass
 
 
 def jdumps(obj: Any, cap: int | None = None) -> str | None:

@@ -1,19 +1,28 @@
 import { api, setToken, clearToken, getToken, setUnauthorizedHandler } from "./api.js";
-import { el, clear, toast, button, field, runDisposers } from "./ui.js";
+import { el, clear, toast, button, field, icon, runDisposers } from "./ui.js";
 import { VIEWS, setRerender, setPrefill } from "./views.js";
 
 const app = document.getElementById("app");
 
+// Primary nav (sidebar) + which appear in the mobile bottom bar.
 const NAV = [
-  ["dashboard", "Dashboard"], ["search", "Search"], ["tools", "Tools"], ["vault", "Vault"],
-  ["identity", "Identity"], ["accounts", "Accounts"], ["timeline", "Timeline"],
-  ["notes", "Notes"], ["jobs", "Jobs"], ["logs", "Logs"], ["settings", "Settings"],
+  { key: "investigate", label: "Investigate", icon: "investigate", mobile: true },
+  { key: "cases", label: "Cases", icon: "cases", mobile: true },
+  { key: "sources", label: "Sources", icon: "key", mobile: true },
+  { key: "analytics", label: "Analytics", icon: "chart", mobile: false },
+  { key: "audit", label: "Audit Trail", icon: "shield", mobile: true },
 ];
+const ADV = [
+  { key: "jobs", label: "Activity", icon: "activity" },
+  { key: "tools", label: "Tools", icon: "tool" },
+  { key: "data", label: "Data", icon: "database" },
+  { key: "settings", label: "Settings", icon: "settings", mobile: true },
+];
+const LABELS = Object.fromEntries([...NAV, ...ADV].map(n => [n.key, n.label]));
 
-let currentRoute = "dashboard";
+let me = null;
 
 setUnauthorizedHandler(() => { clearToken(); showLogin(); });
-
 boot();
 
 async function boot() {
@@ -22,19 +31,31 @@ async function boot() {
   catch { app.textContent = "Cannot reach the GoFindMe server."; return; }
   if (!health.setup_complete) return showSetup();
   if (!getToken()) return showLogin();
-  try { await api.get("/api/me"); renderShell(); }
+  try { me = await api.get("/api/me"); renderShell(); }
   catch { showLogin(); }
 }
 
-/* ----------------------------- auth screens ----------------------------- */
+/* ------------------------------ brand mark ------------------------------ */
+function brandmark(withTag = true) {
+  return el("div", { class: "brandmark" }, [
+    el("div", { class: "glyph" }, [icon("investigate")]),
+    el("div", {}, [
+      el("div", { class: "wm", text: "GoFindMe" }),
+      withTag ? el("div", { class: "tag", text: "Investigations Console" }) : null,
+    ]),
+  ]);
+}
+
+/* ------------------------------ auth screens ---------------------------- */
 function authShell(title, subtitle, inputs, submitText, onSubmit) {
   clear(app);
   const card = el("div", { class: "authcard" }, [
-    el("div", { class: "row" }, [el("div", { class: "logo", text: "⌖" }),
-      el("div", {}, [el("h1", { text: title }), el("div", { class: "small muted", text: subtitle })])]),
-    el("div", { class: "col" }, [
+    brandmark(),
+    el("h1", { text: title }),
+    el("div", { class: "sub", text: subtitle }),
+    el("div", { class: "col", style: "margin-top:8px" }, [
       ...Object.entries(inputs).map(([k, i]) => field(k, i)),
-      button(submitText, { cls: "primary", onclick: onSubmit }),
+      button(submitText, { cls: "primary block lg", onclick: onSubmit }),
     ]),
   ]);
   Object.values(inputs).forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") onSubmit(); }));
@@ -43,14 +64,13 @@ function authShell(title, subtitle, inputs, submitText, onSubmit) {
 
 function showSetup() {
   const inputs = {
-    Username: el("input", { autocomplete: "username" }),
+    Username: el("input", { autocomplete: "username", placeholder: "e.g. analyst" }),
     Password: el("input", { type: "password", autocomplete: "new-password", placeholder: "min 8 characters" }),
   };
-  authShell("Welcome to GoFindMe", "Create the owner account (one-time).", inputs, "Create account", async () => {
+  authShell("Create owner account", "One-time setup for this console.", inputs, "Create account", async () => {
     try {
-      const r = await api.post("/api/auth/setup",
-        { username: inputs.Username.value, password: inputs.Password.value });
-      setToken(r.token); renderShell();
+      const r = await api.post("/api/auth/setup", { username: inputs.Username.value, password: inputs.Password.value });
+      setToken(r.token); me = { username: inputs.Username.value }; renderShell();
     } catch (e) { toast(e.message, true); }
   });
 }
@@ -60,58 +80,78 @@ function showLogin() {
     Username: el("input", { autocomplete: "username" }),
     Password: el("input", { type: "password", autocomplete: "current-password" }),
   };
-  authShell("GoFindMe", "Sign in to your console.", inputs, "Sign in", async () => {
+  authShell("Sign in", "Access your investigations console.", inputs, "Sign in", async () => {
     try {
-      const r = await api.post("/api/auth/login",
-        { username: inputs.Username.value, password: inputs.Password.value });
-      setToken(r.token); renderShell();
+      const r = await api.post("/api/auth/login", { username: inputs.Username.value, password: inputs.Password.value });
+      setToken(r.token); me = { username: inputs.Username.value }; renderShell();
     } catch (e) { toast(e.message, true); }
   });
 }
 
-/* ------------------------------- app shell ------------------------------ */
+/* -------------------------------- app shell ----------------------------- */
+function navButton(item) {
+  return el("button", { class: "navlink", "data-route": item.key,
+    onclick: () => { location.hash = "#/" + item.key; } },
+    [icon(item.icon), el("span", { text: item.label })]);
+}
+
 function renderShell() {
   clear(app);
-  const tabs = el("nav", { class: "tabs" });
-  for (const [key, label] of NAV) {
-    tabs.append(el("button", { class: "tab", "data-route": key, text: label,
-      onclick: () => { location.hash = "#/" + key; } }));
-  }
-  const header = el("header", {}, [
-    el("div", { class: "bar" }, [
-      el("div", { class: "logo", text: "⌖" }),
-      el("div", { class: "brand" }, [el("h1", { text: "GoFindMe" }),
-        el("div", { class: "sub", text: "self-hosted OSINT console" })]),
-      el("div", { class: "spacer" }),
-      button("Logout", { cls: "sm ghost", onclick: logout }),
+  const uname = (me && me.username) || "operator";
+  const sidebar = el("aside", { class: "sidebar" }, [
+    brandmark(),
+    ...NAV.map(navButton),
+    el("div", { class: "navsec", text: "Advanced" }),
+    ...ADV.map(navButton),
+    el("div", { class: "grow" }),
+    el("div", { class: "userchip" }, [
+      el("div", { class: "av", text: uname.slice(0, 1).toUpperCase() }),
+      el("div", { style: "min-width:0;flex:1" }, [
+        el("div", { class: "nm", text: uname }), el("div", { class: "ro", text: "Owner · single-user" })]),
+      button("", { cls: "sm ghost", icon: "logout", label: "Log out", onclick: logout }),
     ]),
-    tabs,
   ]);
-  const main = el("main", {}, [el("div", { id: "view" })]);
-  app.append(header, main);
 
-  setRerender(() => renderRoute(currentRoute));
-  window.addEventListener("hashchange", () => renderRoute(routeFromHash()));
-  renderRoute(routeFromHash());
+  const topbar = el("header", { class: "topbar" }, [
+    el("div", { class: "crumbs", id: "crumbs" }, [el("h1", { id: "page-title", text: "Investigate" })]),
+    el("div", { class: "sp" }),
+    el("div", { id: "topbar-actions", class: "row" }),
+  ]);
+  const main = el("main", { class: "main" }, [topbar, el("div", { class: "content", id: "view" })]);
+
+  const mob = el("nav", { class: "mobnav" }, [...NAV.filter(n => n.mobile), ...ADV.filter(n => n.mobile)]
+    .map(item => el("button", { "data-route": item.key, onclick: () => { location.hash = "#/" + item.key; } },
+      [icon(item.icon), el("span", { text: item.label })])));
+
+  app.append(el("div", { class: "app-shell" }, [sidebar, main]), mob);
+
+  setRerender(() => renderRoute(parseHash()));
+  window.addEventListener("hashchange", () => renderRoute(parseHash()));
+  renderRoute(parseHash());
 }
 
-function routeFromHash() {
-  const h = location.hash.replace(/^#\/?/, "");
-  return VIEWS[h] ? h : "dashboard";
+function parseHash() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const route = parts[0] || "investigate";
+  return { route: VIEWS[route] ? route : "investigate", params: parts.slice(1) };
 }
 
-async function renderRoute(route) {
-  currentRoute = route;
+async function renderRoute({ route, params }) {
   runDisposers();
-  for (const t of document.querySelectorAll(".tab"))
+  for (const t of document.querySelectorAll(".navlink, .mobnav button"))
     t.classList.toggle("active", t.dataset.route === route);
+  // reset header
+  const crumbs = document.getElementById("crumbs");
+  clear(crumbs); crumbs.append(el("h1", { id: "page-title", text: LABELS[route] || "Investigate" }));
+  clear(document.getElementById("topbar-actions"));
   const view = document.getElementById("view");
   clear(view);
   try {
-    await VIEWS[route](view);
+    await VIEWS[route](view, params);
   } catch (e) {
-    view.append(el("div", { class: "empty", text: "Error: " + e.message }));
+    view.append(el("div", { class: "callout bad" }, [icon("alert"), el("div", { text: "Error: " + e.message })]));
   }
+  window.scrollTo(0, 0);
 }
 
 async function logout() {
