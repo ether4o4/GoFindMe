@@ -1,175 +1,297 @@
 import { api, streamJob } from "./api.js";
-import { el, clear, toast, field, button, statusDot, onDispose, confirmAction } from "./ui.js";
+import { el, clear, toast, field, button, icon, statusDot, onDispose,
+         confirmAction, modal, skeleton, emptyState } from "./ui.js";
 
-let prefill = null;          // target handed from Dashboard → Search
+let prefill = null;
 export function setPrefill(t) { prefill = t; }
+let _rerender = () => {};
+export function setRerender(fn) { _rerender = fn; }
+function rerender() { _rerender(); }
 
 const TARGET_TYPES = ["username", "realname", "email", "phone", "domain", "ip", "hash", "bitcoin"];
+const EXAMPLES = [["example.com", "domain"], ["8.8.8.8", "ip"], ["johndoe", "username"], ["test@example.com", "email"]];
+const GROUP_COLORS = { subject: "#2dd4a7", source: "#5b8cff", identifier: "#f5b544", account: "#a98bff" };
 
-/* =========================== Dashboard =========================== */
-async function dashboard(root) {
-  root.append(el("div", { class: "banner" }, [
-    el("span", { text: "⚠️" }),
-    el("div", { html: "<b>Authorized use only.</b> GoFindMe runs recon tools and queries APIs " +
-      "on your behalf. Investigate only targets you are authorized to — your own footprint or " +
-      "scoped engagements — and respect each service's terms." }),
-  ]));
-
-  root.append(el("div", { class: "guide" }, [
-    el("h3", {}, ["🚀 Getting started — 3 steps"]),
-    el("ol", {}, [
-      el("li", { html: "Type a <b>target</b> below (username, email, domain, IP, hash, phone, or BTC address) and tap <b>Search&nbsp;All</b>." }),
-      el("li", { html: "Results stream in from installed <b>tools</b> and <b>providers</b>. <b>crt.sh works with no key</b>, so you can try it right now." }),
-      el("li", { html: "Want more sources? Open the <b>Vault</b> and paste API keys — every provider has a <b>“Get key ↗”</b> link straight to its signup page." }),
-    ]),
-    el("div", { class: "row" }, [
-      button("Open Vault →", { cls: "sm", onclick: () => (location.hash = "#/vault") }),
-      button("Browse tools →", { cls: "sm ghost", onclick: () => (location.hash = "#/tools") }),
-    ]),
-  ]));
-
-  const search = el("div", { class: "row" }, [
-    el("input", { placeholder: "Search a target — username, email, phone, domain, IP, hash…",
-                  id: "dashq", style: "flex:1;min-width:240px" }),
-    button("⚡ Search All", { cls: "primary", onclick: go }),
-  ]);
-  function go() {
-    const q = document.getElementById("dashq").value.trim();
-    if (!q) return toast("Enter a target", true);
-    setPrefill(q); location.hash = "#/search";
-  }
-  document.addEventListener("keydown", function onk(e) {
-    if (e.key === "Enter" && document.activeElement?.id === "dashq") go();
+/* ----------------------------- shared bits ---------------------------- */
+function crumbs(items) {
+  const c = document.getElementById("crumbs"); if (!c) return; clear(c);
+  items.forEach((it, i) => {
+    if (i) c.append(el("span", { class: "faint", style: "margin:0 2px", text: "/" }));
+    if (it.hash) c.append(el("a", { href: it.hash, text: it.text }));
+    else c.append(el("h1", { id: "page-title", text: it.text }));
   });
-  root.append(search);
-
-  const kpi = el("div", { class: "kpi" });
-  root.append(el("h2", { text: "Overview" }), kpi);
-  try {
-    const o = await api.get("/api/overview");
-    const cards = [
-      ["Identity items", o.identity_items], ["Accounts", o.accounts],
-      ["Without 2FA", o.accounts_without_2fa], ["Timeline events", o.timeline_events],
-      ["Findings", o.findings], ["Breached emails", o.breached_emails.length],
-      ["Jobs run", o.jobs_total], ["Running now", o.jobs_running],
-    ];
-    for (const [l, n] of cards)
-      kpi.append(el("div", { class: "card" }, [el("div", { class: "n", text: String(n) }),
-                                               el("div", { class: "l", text: l })]));
-    if (o.breached_emails.length)
-      root.append(el("div", { class: "card", style: "margin-top:14px" }, [
-        el("div", { class: "ch" }, [el("span", { text: "Emails seen in breaches" })]),
-        el("div", { class: "cd", text: o.breached_emails.join(", ") }),
-      ]));
-  } catch (e) { kpi.append(el("div", { class: "empty", text: "Could not load overview." })); }
+}
+function topActions(...els) {
+  const a = document.getElementById("topbar-actions"); if (!a) return;
+  clear(a); els.forEach(e => e && a.append(e));
+}
+function stat(n, l, ic, cls = "") {
+  return el("div", { class: "stat" }, [el("div", { class: "ic" }, [icon(ic)]),
+    el("div", { class: "n " + cls, text: String(n) }), el("div", { class: "l", text: l })]);
+}
+function svgEl(tag, attrs = {}) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, v);
+  return e;
+}
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+function pageHead(title, sub) {
+  return [el("div", { class: "page-title", text: title }), sub ? el("div", { class: "page-sub", text: sub }) : null];
 }
 
-/* ============================= Search ============================ */
-async function searchView(root) {
-  const q = el("input", { placeholder: "Target…", value: prefill || "", style: "flex:1;min-width:240px" });
-  const typeSel = el("select", { style: "max-width:170px" },
-    [el("option", { value: "", text: "auto-detect" }), ...TARGET_TYPES.map(t => el("option", { value: t, text: t }))]);
-  const detected = el("div", { class: "small muted", style: "margin-top:6px" });
-  const results = el("div");
-  const run = button("⚡ Search All", { cls: "primary", onclick: doSearch });
+/* =============================== Investigate ============================ */
+async function investigateView(root) {
+  const input = el("input", { placeholder: "Enter a username, email, domain, IP, phone, hash, or name…",
+    "aria-label": "Investigation target" });
+  const detected = el("div", { class: "detected" });
+  const goBtn = button("Investigate", { cls: "primary", icon: "investigate", onclick: go });
+  root.append(el("div", { class: "hero" }, [
+    el("h2", { text: "Start an investigation" }),
+    el("p", { text: "Enter any identifier. GoFindMe opens a case, runs every available tool and data source against it, and organizes the results into a court-ready file." }),
+    el("div", { class: "searchbar" }, [
+      el("div", { class: "inpwrap" }, [icon("search"), input]), goBtn]),
+    detected,
+    el("div", { class: "chips" }, EXAMPLES.map(([v]) =>
+      el("button", { class: "chip", text: v, onclick: () => { input.value = v; go(); } }))),
+  ]));
 
-  q.addEventListener("input", debounce(updateDetect, 250));
-  q.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
-  const hint = el("div", { class: "viewhint", html:
-    "Type any target — GoFindMe auto-detects what it is and runs every <b>installed tool</b> + " +
-    "<b>configured provider</b> for that type. No setup? Tap an example (crt.sh needs no key):" });
-  const examples = [["example.com", "domain"], ["8.8.8.8", "ip"],
-                    ["johndoe", "username"], ["test@example.com", "email"]];
-  const chips = el("div", { class: "chips" }, examples.map(([val]) =>
-    el("span", { class: "chip", text: val, onclick: () => { q.value = val; doSearch(); } })));
-  root.append(el("div", { class: "row" }, [q, typeSel, run]), hint, chips, detected, results);
+  input.addEventListener("input", debounce(updateDetect, 250));
+  input.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  if (prefill) { input.value = prefill; prefill = null; }
+  setTimeout(() => input.focus(), 40);
 
   async function updateDetect() {
-    const t = q.value.trim();
-    if (!t || typeSel.value) { detected.textContent = ""; return; }
-    try { const d = await api.post("/api/detect", { target: t });
-      detected.textContent = d.candidate_types.length ? "Detected: " + d.candidate_types.join(", ") : "";
+    const t = input.value.trim(); clear(detected);
+    if (!t) return;
+    try {
+      const d = await api.post("/api/detect", { target: t });
+      if (!d.candidate_types.length) return;
+      detected.append(document.createTextNode("Looks like: "));
+      d.candidate_types.forEach((ty, i) => {
+        if (i) detected.append(document.createTextNode(", "));
+        detected.append(el("b", { text: ty }));
+      });
     } catch {}
   }
-  updateDetect();
-
-  async function doSearch() {
-    const target = q.value.trim();
-    if (!target) return toast("Enter a target", true);
-    clear(results);
-    let res;
-    try { res = await api.post("/api/search-all", { target, type: typeSel.value || null }); }
-    catch (e) { return toast(e.message, true); }
-
-    results.append(el("h2", { text: `Tools · ${res.tool_jobs.length}` }));
-    const toolGrid = el("div", { class: "grid" });
-    results.append(toolGrid);
-    if (!res.tool_jobs.length)
-      toolGrid.append(el("div", { class: "empty", text: "No installed auto-runnable tools for this type." }));
-    for (const tj of res.tool_jobs) toolGrid.append(toolJobCard(tj.name, tj.job_id));
-
-    if (res.tools_skipped.length)
-      results.append(el("div", { class: "small muted", style: "margin-top:8px" },
-        ["Not installed: " + res.tools_skipped.join(", ") + " — install them from the Tools tab."]));
-
-    results.append(el("h2", { text: `Providers · ${res.providers.length}` }));
-    const provGrid = el("div", { class: "grid" });
-    results.append(provGrid);
-    if (!res.providers.length)
-      provGrid.append(el("div", { class: "empty", text: "No keyless/configured providers for this type. Add keys in the Vault tab." }));
-    pollFindings(res.target, res.type, res.providers, provGrid);
+  async function go() {
+    const target = input.value.trim();
+    if (!target) return toast("Enter a target to investigate", true);
+    goBtn.disabled = true;
+    try {
+      const res = await api.post("/api/investigate", { target });
+      location.hash = "#/case/" + res.case.id + "/findings";
+    } catch (e) { goBtn.disabled = false; toast(e.message, true); }
   }
+
+  root.append(el("div", { class: "h-sec" }, [icon("cases"), "Recent investigations"]));
+  const host = el("div"); root.append(host); host.append(skeleton(3));
+  try {
+    const cs = await api.get("/api/cases");
+    clear(host);
+    if (!cs.length) host.append(emptyState("cases", "No investigations yet",
+      "Enter a target above to open your first case."));
+    else host.append(el("div", { class: "grid" }, cs.slice(0, 6).map(caseCard)));
+  } catch { clear(host); host.append(el("div", { class: "empty", text: "Could not load cases." })); }
 }
 
-function toolJobCard(name, jobId) {
-  const dot = statusDot("queued");
-  const out = el("pre", { class: "out", text: "" });
-  const det = el("details", {}, [
-    el("summary", {}, [el("span", {}, [dot, " ", el("b", { text: name })]),
-                       el("span", { class: "tag", text: jobId.slice(0, 6) })]),
-    el("div", { class: "body" }, [out]),
+function caseCard(c) {
+  const counts = c.counts || {};
+  return el("div", { class: "card hov click", onclick: () => (location.hash = "#/case/" + c.id) }, [
+    el("div", { class: "between" }, [
+      el("div", { style: "min-width:0" }, [
+        el("div", { class: "mono small", style: "color:var(--brand)", text: c.ref || ("#" + c.id) }),
+        el("div", { style: "font-weight:680;font-size:15px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap", text: c.title }),
+      ]),
+      el("span", { class: "pri " + (c.priority || "normal"), text: c.priority || "normal" }),
+    ]),
+    el("div", { class: "cd", text: (c.subject_type ? c.subject_type + " · " : "") + (c.subject || "—") }),
+    el("div", { class: "row", style: "margin-top:13px;gap:16px" }, [
+      miniStat(counts.findings || 0, "findings"), miniStat(counts.hits || 0, "hits"),
+      miniStat(counts.timeline || 0, "events"), el("span", { class: "sp" }),
+      el("span", { class: "tag " + (c.status === "closed" || c.status === "archived" ? "" : "ok"), text: c.status }),
+    ]),
   ]);
-  det.open = true;
-  const es = streamJob(jobId, ev => {
-    if (ev.type === "output") out.textContent += ev.data;
-    else if (ev.type === "status" && ev.status) {
-      dot.className = statusDot(ev.status).className;
-      dot.title = ev.status + (ev.error ? ": " + ev.error : "");
-      if (ev.error === "tool_not_installed") out.textContent = "(not installed)";
-    }
-    out.scrollTop = out.scrollHeight;
-  });
-  onDispose(() => es.close());
-  return det;
+}
+function miniStat(n, l) {
+  return el("span", { class: "small" }, [el("b", { text: String(n) }), el("span", { class: "muted", text: " " + l })]);
 }
 
-function pollFindings(target, type, providerNames, grid) {
-  const seen = new Map();
-  const started = Date.now();
+/* ================================= Cases =============================== */
+async function casesView(root) {
+  topActions(button("New case", { cls: "primary sm", icon: "plus", onclick: newCaseModal }));
+  root.append(...pageHead("Investigations",
+    "Every investigation is a case: scoped evidence, examiner, legal authority, and a court-ready report."));
+  const host = el("div"); root.append(host); host.append(skeleton(3));
+  const cs = await api.get("/api/cases");
+  clear(host);
+  if (!cs.length)
+    return host.append(emptyState("cases", "No cases yet",
+      "Open one from Investigate, or create a blank case.",
+      button("New case", { cls: "primary", icon: "plus", onclick: newCaseModal })));
+  host.append(el("div", { class: "grid" }, cs.map(caseCard)));
+}
+
+function newCaseModal() {
+  const f = {
+    title: el("input", { placeholder: "Investigation title" }),
+    subject: el("input", { placeholder: "Primary subject (optional)" }),
+    subject_type: el("select", {}, [el("option", { value: "", text: "auto / n/a" }),
+      ...TARGET_TYPES.map(t => el("option", { value: t, text: t }))]),
+    examiner: el("input", { placeholder: "Examiner / analyst name" }),
+    authority: el("input", { placeholder: "Legal authority / authorization ref" }),
+    priority: el("select", {}, ["normal", "low", "high", "urgent"].map(p => el("option", { value: p, text: p }))),
+  };
+  const m = modal("New investigation", "Open a case to scope evidence and generate a report.",
+    [el("div", { class: "col" }, [field("Title", f.title), field("Subject", f.subject),
+      field("Subject type", f.subject_type), field("Examiner", f.examiner),
+      field("Legal authority", f.authority), field("Priority", f.priority)])],
+    [button("Cancel", { cls: "ghost", onclick: () => m.close() }),
+     button("Create case", { cls: "primary", onclick: async () => {
+       try {
+         const c = await api.post("/api/cases", {
+           title: f.title.value, subject: f.subject.value, subject_type: f.subject_type.value || null,
+           examiner: f.examiner.value, authority: f.authority.value, priority: f.priority.value });
+         m.close(); toast("Case " + c.ref + " created"); location.hash = "#/case/" + c.id;
+       } catch (e) { toast(e.message, true); }
+     } })]);
+}
+
+/* ============================ Case workspace =========================== */
+async function caseView(root, params) {
+  const id = parseInt(params[0], 10);
+  const tab = params[1] || "overview";
+  if (!id) { location.hash = "#/cases"; return; }
+  let c;
+  try { c = await api.get("/api/cases/" + id); }
+  catch { return root.append(emptyState("cases", "Case not found", "It may have been deleted.")); }
+
+  crumbs([{ text: "Cases", hash: "#/cases" }, { text: c.ref || ("#" + id) }]);
+  topActions(
+    button("Open report", { cls: "sm", icon: "doc", onclick: () => window.open("/api/cases/" + id + "/report", "_blank") }),
+    button("", { cls: "sm ghost", icon: "trash", label: "Delete case", onclick: () => delCase(c) }),
+  );
+  root.append(caseHeader(c));
+
+  const TABS = [["overview", "Overview", "cases"], ["findings", "Findings", "search"],
+    ["graph", "Graph", "graph"], ["timeline", "Timeline", "clock"], ["report", "Report", "doc"]];
+  root.append(el("div", { class: "subtabs" }, TABS.map(([k, label, ic]) =>
+    el("button", { class: "subtab" + (k === tab ? " active" : ""),
+      onclick: () => (location.hash = "#/case/" + id + "/" + k) }, [icon(ic, "sm"), el("span", { text: label })]))));
+
+  const body = el("div"); root.append(body);
+  if (tab === "findings") await caseFindings(body, c);
+  else if (tab === "graph") await caseGraph(body, c);
+  else if (tab === "timeline") await caseTimeline(body, c);
+  else if (tab === "report") caseReportTab(body, c);
+  else await caseOverview(body, c);
+}
+
+function caseHeader(c) {
+  const counts = c.counts || {};
+  const metaItem = (k, v) => el("div", {}, [el("div", { class: "k", text: k }), el("div", { class: "v", text: v || "—" })]);
+  return el("div", { class: "case-hdr" }, [
+    el("div", { class: "top" }, [
+      el("div", { style: "flex:1;min-width:0" }, [
+        el("div", { class: "ref", text: c.ref || ("#" + c.id) }),
+        el("div", { class: "ttl", text: c.title }),
+      ]),
+      el("span", { class: "pri " + (c.priority || "normal"), text: (c.priority || "normal") }),
+      el("span", { class: "tag " + (c.status === "closed" || c.status === "archived" ? "" : "ok"), text: c.status }),
+    ]),
+    el("div", { class: "meta" }, [
+      metaItem("Subject", (c.subject || "—") + (c.subject_type ? " (" + c.subject_type + ")" : "")),
+      metaItem("Examiner", c.examiner), metaItem("Legal authority", c.authority),
+      metaItem("Findings", String(counts.findings || 0) + " · " + (counts.hits || 0) + " hits"),
+      metaItem("Opened", (c.created_at || "").replace("T", " ")),
+    ]),
+  ]);
+}
+
+async function delCase(c) {
+  if (!confirmAction("Delete case " + (c.ref || c.id) + "? Evidence is unlinked, not destroyed.")) return;
+  try { await api.del("/api/cases/" + c.id); toast("Case deleted"); location.hash = "#/cases"; }
+  catch (e) { toast(e.message, true); }
+}
+
+async function caseOverview(root, c) {
+  const counts = c.counts || {};
+  root.append(el("div", { class: "stats" }, [
+    stat(counts.findings || 0, "Findings", "search"),
+    stat(counts.hits || 0, "Positive hits", "alert", counts.hits ? "badc" : ""),
+    stat(counts.timeline || 0, "Timeline events", "clock"),
+    stat(counts.notes || 0, "Notes", "doc"),
+  ]));
+
+  root.append(el("div", { class: "h-sec" }, [icon("investigate"), "Run sources against this subject"]));
+  const inp = el("input", { value: c.subject || "", placeholder: "target", style: "max-width:340px" });
+  const tsel = el("select", { style: "max-width:150px" }, [el("option", { value: "", text: "auto" }),
+    ...TARGET_TYPES.map(t => el("option", { value: t, text: t, selected: t === c.subject_type ? "selected" : null }))]);
+  root.append(el("div", { class: "row" }, [inp, tsel,
+    button("Run Search-All", { cls: "primary", icon: "search", onclick: async () => {
+      const target = inp.value.trim(); if (!target) return toast("Enter a target", true);
+      try { await api.post("/api/cases/" + c.id + "/search", { target, type: tsel.value || null });
+        toast("Search started"); location.hash = "#/case/" + c.id + "/findings"; }
+      catch (e) { toast(e.message, true); }
+    } })]));
+
+  root.append(el("div", { class: "h-sec" }, [icon("settings"), "Case status"]));
+  const statusSel = el("select", { style: "max-width:150px" },
+    ["open", "active", "closed", "archived"].map(s => el("option", { value: s, text: s, selected: s === c.status ? "selected" : null })));
+  const prioSel = el("select", { style: "max-width:150px" },
+    ["low", "normal", "high", "urgent"].map(p => el("option", { value: p, text: p, selected: p === c.priority ? "selected" : null })));
+  const exam = el("input", { value: c.examiner || "", placeholder: "Examiner", style: "max-width:220px" });
+  const auth = el("input", { value: c.authority || "", placeholder: "Legal authority", style: "max-width:260px" });
+  root.append(el("div", { class: "row" }, [statusSel, prioSel, exam, auth,
+    button("Save", { cls: "sm primary", onclick: async () => {
+      try { await api.put("/api/cases/" + c.id, { status: statusSel.value, priority: prioSel.value,
+        examiner: exam.value, authority: auth.value }); toast("Saved"); rerender(); }
+      catch (e) { toast(e.message, true); }
+    } })]));
+
+  root.append(el("div", { class: "h-sec" }, [icon("doc"), "Executive summary"]));
+  const ta = el("textarea", { placeholder: "Write the investigation summary that appears on the report cover…" });
+  ta.value = c.summary || "";
+  root.append(ta, el("div", { class: "row mt" }, [button("Save summary", { cls: "sm primary", onclick: async () => {
+    try { await api.put("/api/cases/" + c.id, { summary: ta.value }); toast("Summary saved"); }
+    catch (e) { toast(e.message, true); } }})]));
+}
+
+async function caseFindings(root, c) {
+  const status = el("div", { class: "callout brand" }, [icon("activity"),
+    el("div", { html: "Collecting results… tools and data sources are running. New findings appear below automatically." })]);
+  root.append(status);
+  const grid = el("div", { class: "grid" }); root.append(grid);
+  const seen = new Set();
+  let stableRounds = 0, rounds = 0;
+
   async function tick() {
     let rows;
-    try { rows = await api.get(`/api/findings?target=${encodeURIComponent(target)}&type=${type}`); }
-    catch { return; }
-    for (const f of rows.filter(r => r.source_kind === "provider")) {
-      if (seen.has(f.source_name)) continue;
-      seen.set(f.source_name, true);
-      grid.append(findingCard(f));
+    try { rows = await api.get("/api/cases/" + c.id + "/findings"); } catch { return; }
+    let added = 0;
+    for (const f of rows) {
+      const k = f.source_name + ":" + f.id;
+      if (seen.has(k)) continue;
+      seen.add(k); grid.append(findingCard(f)); added++;
     }
-    const done = seen.size >= providerNames.length || Date.now() - started > 90000;
-    if (done) clearInterval(timer);
+    rounds++;
+    stableRounds = added ? 0 : stableRounds + 1;
+    if (!grid.children.length && rounds > 1)
+      grid.append(emptyState("search", "No findings yet",
+        "Providers need API keys to return data — add them under Sources. Keyless sources (crt.sh) work immediately."));
+    if (stableRounds >= 4 || rounds > 40) { clearInterval(timer); status.remove(); }
   }
-  const timer = setInterval(tick, 2000);
-  onDispose(() => clearInterval(timer));
-  tick();
+  const timer = setInterval(tick, 2000); onDispose(() => clearInterval(timer));
+  await tick();
 }
 
 function findingCard(f) {
   const s = f.summary || {};
   const found = s.found;
+  const badge = found === true ? ["tag bad", "HIT"] : found === false ? ["tag ok", "CLEAR"] : ["tag", "INFO"];
   const head = el("div", { class: "ch" }, [
-    el("span", {}, [el("b", { text: f.source_name }), " ", el("span", { class: "tag", text: f.target_type })]),
-    el("span", { class: "tag " + (found === true ? "ok" : found === false ? "" : "warn"),
-                 text: found === true ? "hit" : found === false ? "clear" : "info" }),
+    el("span", { style: "display:flex;align-items:center;gap:8px" },
+      [el("b", { text: f.source_name }), el("span", { class: "tag", text: f.target_type })]),
+    el("span", { class: badge[0], text: badge[1] }),
   ]);
   const body = el("div", { class: "cd" });
   for (const [k, v] of Object.entries(s)) {
@@ -177,296 +299,451 @@ function findingCard(f) {
     body.append(el("div", { text: `${k}: ${Array.isArray(v) ? v.slice(0, 8).join(", ") : v}` }));
   }
   const card = el("div", { class: "card" }, [head, body]);
-  if (f.raw) {
-    card.append(el("details", { style: "margin-top:10px" }, [
-      el("summary", { text: "raw" }),
-      el("div", { class: "body" }, [el("pre", { class: "out", text: JSON.stringify(f.raw, null, 2) })]),
-    ]));
-  }
+  if (f.raw)
+    card.append(el("details", { style: "margin-top:10px" }, [el("summary", { text: "raw payload" }),
+      el("div", { class: "body" }, [el("pre", { class: "out", text: JSON.stringify(f.raw, null, 2) })])]));
   return card;
 }
 
-/* ============================== Tools =========================== */
-async function toolsView(root) {
-  const mgr = await api.get("/api/tools/managers").catch(() => ({ allowed: false, available: {} }));
-  const head = el("div", { class: "row" }, [
-    el("div", { class: "small muted", style: "flex:1" },
-      [mgr.allowed
-        ? "Managers: " + Object.entries(mgr.available).map(([m, ok]) => `${m}${ok ? "✓" : "✗"}`).join("  ")
-        : "In-app install/update is off in this build. Install tools on your computer (and make sure " +
-          "they're on your PATH) — they'll be auto-detected here. For one-click installs, use the Python/server version."]),
-    mgr.allowed ? button("⬆ Update all installed", { onclick: async () => {
-      const r = await api.post("/api/tools/update-all"); toast(`Updating ${r.started.length}`); location.hash = "#/jobs";
-    } }) : null,
-    button("＋ Add custom tool", { cls: "primary", onclick: () => addCustom(root) }),
-  ]);
-  root.append(el("h2", { text: "Installed tools & frameworks" }), head);
-
-  const grid = el("div", { class: "grid" });
-  root.append(grid);
-  const tools = await api.get("/api/tools");
-  for (const t of tools) grid.append(toolCard(t, mgr));
+async function caseGraph(root, c) {
+  root.append(el("div", { class: "page-sub", style: "margin-bottom:14px",
+    text: "Auto-derived link analysis: the subject, tracked accounts, and every source hit and identifier found. Drag nodes, scroll to zoom, click to inspect." }));
+  const host = el("div"); root.append(host); host.append(skeleton(1, "skel-card"));
+  let data;
+  try { data = await api.get("/api/cases/" + c.id + "/graph"); } catch (e) { clear(host); return host.append(el("div", { class: "empty", text: e.message })); }
+  clear(host);
+  if (!data.nodes.length)
+    return host.append(emptyState("graph", "Nothing to graph yet",
+      "Run a search or add accounts to this case, then the relationship graph builds itself."));
+  const wrap = el("div", { class: "graphwrap" });
+  wrap.append(el("div", { class: "graph-legend" }, Object.entries(GROUP_COLORS).map(([g, col]) =>
+    el("span", {}, [el("i", { style: "background:" + col }), g]))));
+  host.append(wrap);
+  forceGraph(wrap, data);
 }
 
-function toolCard(t, mgr) {
-  const avail = el("span", { class: "tag " + (t.available ? "ok" : ""), text: t.available ? "installed" : "missing" });
-  const kind = el("span", { class: "tag", text: t.interactive ? "GUI/manual" : (t.source === "custom" ? "custom" : "cli") });
-  const head = el("div", { class: "ch" }, [el("span", {}, [el("b", { text: t.name }), " ", kind]), avail]);
-  const meta = el("div", { class: "cd" }, [
-    `accepts: ${(t.accepts || []).join(", ") || "—"}`,
-    t.install_method !== "none" ? el("div", { text: `install: ${t.install_method} ${t.install_ref || ""}` }) : null,
-    t.notes ? el("div", { class: "muted", text: t.notes }) : null,
-  ]);
-  const actions = el("div", { class: "row", style: "margin-top:10px" });
-  if (t.url)
-    actions.append(el("a", { class: "btn sm ghost", href: t.url, target: "_blank",
-                             rel: "noopener noreferrer", text: "Home ↗" }));
-  if (t.key_url)
-    actions.append(el("a", { class: "btn sm ghost", href: t.key_url, target: "_blank",
-                             rel: "noopener noreferrer", text: "Get key ↗" }));
-  if (t.available)
-    actions.append(button("Version", { cls: "sm ghost", onclick: () => manage(t.name, "version") }));
-  if (mgr.allowed && t.install_method !== "none" && mgr.available[t.install_method]) {
-    actions.append(button(t.available ? "Update" : "Install",
-      { cls: "sm", onclick: () => manage(t.name, t.available ? "update" : "install") }));
+function forceGraph(container, data) {
+  const W = Math.max(320, container.clientWidth || 900), H = 500;
+  const nodes = data.nodes.map((n, i) => ({ ...n,
+    x: W / 2 + Math.cos(i * 2.4) * (80 + i * 4), y: H / 2 + Math.sin(i * 2.4) * (80 + i * 4),
+    vx: 0, vy: 0 }));
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const links = data.edges.map(e => ({ s: byId[e.source], t: byId[e.target], rel: e.relation }))
+    .filter(l => l.s && l.t);
+  nodes.forEach(n => (n.deg = 0));
+  links.forEach(l => { l.s.deg++; l.t.deg++; });
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "xMidYMid meet", style: `height:${H}px` });
+  const rootG = svgEl("g"); svg.append(rootG);
+  const gE = svgEl("g"); const gN = svgEl("g"); rootG.append(gE, gN);
+  const edgeEls = links.map(() => { const ln = svgEl("line", { class: "gedge" }); gE.append(ln); return ln; });
+
+  let scale = 1, tx = 0, ty = 0;
+  const applyT = () => rootG.setAttribute("transform", `translate(${tx},${ty}) scale(${scale})`);
+  const toLocal = ev => { const r = svg.getBoundingClientRect();
+    return { x: (ev.clientX - r.left) * (W / r.width) / scale - tx / scale,
+             y: (ev.clientY - r.top) * (H / r.height) / scale - ty / scale }; };
+
+  let panel = null;
+  function inspect(n) {
+    if (panel) panel.remove();
+    panel = el("div", { class: "g-inspect" }, [
+      el("div", { class: "between" }, [el("h4", { text: n.label }),
+        button("", { cls: "sm ghost", icon: "x", onclick: () => { panel.remove(); panel = null; } })]),
+      el("div", { class: "kv" }, [el("span", { class: "k", text: "type" }), el("span", { text: n.type })]),
+      el("div", { class: "kv" }, [el("span", { class: "k", text: "group" }), el("span", { text: n.group })]),
+      ...Object.entries(n.meta || {}).filter(([, v]) => v != null && v !== "").slice(0, 6)
+        .map(([k, v]) => el("div", { class: "kv" }, [el("span", { class: "k", text: k }), el("span", { text: String(v) })])),
+    ]);
+    container.append(panel);
   }
-  if (t.interactive)
-    actions.append(button("Copy command", { cls: "sm ghost",
-      onclick: () => { navigator.clipboard.writeText(t.run_template.replace("{bin}", t.bin)); toast("Copied"); } }));
-  if (t.source === "custom")
-    actions.append(button("Delete", { cls: "sm danger", onclick: async () => {
-      if (!confirmAction(`Delete custom tool ${t.name}?`)) return;
-      await api.del(`/api/tools/custom/${t.name}`); toast("Deleted"); rerender();
-    } }));
-  return el("div", { class: "card" }, [head, meta, actions]);
+
+  const nodeEls = nodes.map(n => {
+    const g = svgEl("g", { class: "gnode" });
+    const r = n.group === "subject" ? 17 : 8 + Math.min(n.deg, 7);
+    g.append(svgEl("circle", { r, fill: GROUP_COLORS[n.group] || "#8b93a7", stroke: "#0a0c10", "stroke-width": 2 }));
+    const t = svgEl("text", { x: 0, y: r + 13, "text-anchor": "middle" });
+    t.textContent = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
+    g.append(t); gN.append(g);
+    let dragging = false;
+    g.addEventListener("pointerdown", ev => { ev.stopPropagation(); dragging = true; n.fixed = true;
+      g.setPointerCapture(ev.pointerId); inspect(n); });
+    g.addEventListener("pointermove", ev => { if (!dragging) return; const p = toLocal(ev); n.x = p.x; n.y = p.y; n.vx = n.vy = 0; });
+    g.addEventListener("pointerup", () => { dragging = false; n.fixed = false; });
+    return { g, n };
+  });
+
+  svg.addEventListener("wheel", ev => { ev.preventDefault();
+    scale = Math.max(0.35, Math.min(3, scale * (ev.deltaY < 0 ? 1.12 : 0.9))); applyT(); }, { passive: false });
+  let panning = false, px = 0, py = 0;
+  svg.addEventListener("pointerdown", ev => { panning = true; px = ev.clientX; py = ev.clientY; });
+  svg.addEventListener("pointermove", ev => { if (!panning) return;
+    tx += ev.clientX - px; ty += ev.clientY - py; px = ev.clientX; py = ev.clientY; applyT(); });
+  window.addEventListener("pointerup", () => (panning = false));
+
+  let alpha = 1, ticks = 0, raf = 0;
+  function tick() {
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j]; let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy || 0.01, d = Math.sqrt(d2), rep = 2400 / d2;
+      const fx = dx / d * rep, fy = dy / d * rep; a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+    for (const l of links) {
+      let dx = l.t.x - l.s.x, dy = l.t.y - l.s.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const desired = l.s.group === "subject" || l.t.group === "subject" ? 115 : 74;
+      const f = (d - desired) * 0.02, fx = dx / d * f, fy = dy / d * f;
+      l.s.vx += fx; l.s.vy += fy; l.t.vx -= fx; l.t.vy -= fy;
+    }
+    for (const n of nodes) { n.vx += (W / 2 - n.x) * 0.008; n.vy += (H / 2 - n.y) * 0.008; }
+    for (const n of nodes) { if (n.fixed) continue; n.vx *= 0.85; n.vy *= 0.85; n.x += n.vx * alpha; n.y += n.vy * alpha; }
+    for (let i = 0; i < links.length; i++) {
+      const l = links[i], e = edgeEls[i];
+      e.setAttribute("x1", l.s.x); e.setAttribute("y1", l.s.y); e.setAttribute("x2", l.t.x); e.setAttribute("y2", l.t.y);
+    }
+    for (const ne of nodeEls) ne.g.setAttribute("transform", `translate(${ne.n.x},${ne.n.y})`);
+    alpha *= 0.992; ticks++;
+    if (ticks < 500 && alpha > 0.015) raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+  onDispose(() => cancelAnimationFrame(raf));
+  container.append(svg);
 }
 
-async function manage(name, action) {
-  try {
-    const r = await api.post(`/api/tools/${name}/${action}`);
-    toast(`${action} started`); location.hash = "#/jobs";
-    return r;
-  } catch (e) { toast(e.message, true); }
-}
+async function caseTimeline(root, c) {
+  const form = el("div", { class: "card mb" }, []);
+  const fType = el("select", {}, ["account_created", "device_added", "breach", "note"].map(t => el("option", { value: t, text: t })));
+  const fWhen = el("input", { placeholder: "Year or date (e.g. 2021 or 2021-06)" });
+  const fTitle = el("input", { placeholder: "Event title" });
+  const fDetail = el("textarea", { placeholder: "Detail (optional)" });
+  form.append(el("div", { class: "row" }, [field("Type", fType), field("When", fWhen)]),
+    field("Title", fTitle), field("Detail", fDetail),
+    el("div", { class: "row mt" }, [button("Add event", { cls: "primary sm", icon: "plus", onclick: add })]));
+  root.append(el("div", { class: "h-sec" }, [icon("clock"), "Add timeline event"]), form);
+  const host = el("div"); root.append(host);
+  await load();
 
-function addCustom(root) {
-  const f = {
-    name: el("input", { placeholder: "mytool" }),
-    bin: el("input", { placeholder: "executable name on PATH" }),
-    accepts: el("input", { placeholder: "username, domain (comma-separated types)" }),
-    run_template: el("input", { placeholder: "{bin} -u {target}" }),
-    install_method: el("select", {}, ["none", "pip", "pipx", "go", "git", "npm"].map(m => el("option", { value: m, text: m }))),
-    install_ref: el("input", { placeholder: "package / module@version / https repo" }),
-  };
-  const card = el("div", { class: "card", style: "margin:14px 0" }, [
-    el("div", { class: "ch" }, [el("span", { text: "Add custom tool" })]),
-    field("Name", f.name), field("Binary", f.bin), field("Accepts types", f.accepts),
-    field("Run template (must include {target})", f.run_template),
-    field("Install method", f.install_method), field("Install reference", f.install_ref),
-    el("div", { class: "row", style: "margin-top:10px" }, [
-      button("Save", { cls: "primary", onclick: save }),
-      button("Cancel", { cls: "ghost", onclick: () => card.remove() }),
-    ]),
-  ]);
-  root.insertBefore(card, root.children[2] || null);
-  async function save() {
-    const accepts = f.accepts.value.split(",").map(s => s.trim()).filter(Boolean);
+  async function add() {
+    if (!fTitle.value.trim()) return toast("Title required", true);
     try {
-      await api.post("/api/tools/custom", {
-        name: f.name.value.trim(), bin: f.bin.value.trim(), accepts, categories: accepts,
-        run_template: f.run_template.value.trim(), install_method: f.install_method.value,
-        install_ref: f.install_ref.value.trim() || null,
-      });
-      toast("Saved"); rerender();
+      await api.post("/api/timeline", { event_type: fType.value, occurred_at: fWhen.value,
+        title: fTitle.value, detail: fDetail.value, case_id: c.id });
+      fTitle.value = fDetail.value = fWhen.value = ""; toast("Added"); await load();
     } catch (e) { toast(e.message, true); }
   }
+  async function load() {
+    clear(host);
+    const rows = await api.get("/api/timeline?case_id=" + c.id);
+    if (!rows.length) return host.append(emptyState("clock", "No timeline yet", "Add events to reconstruct the subject's history."));
+    const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "When" }),
+      el("th", { text: "Type" }), el("th", { text: "Event" }), el("th", { text: "" })])])]);
+    const tb = el("tbody");
+    for (const e of rows) tb.append(el("tr", {}, [el("td", { text: e.occurred_at || "—" }),
+      el("td", {}, [el("span", { class: "tag", text: e.event_type })]),
+      el("td", {}, [el("b", { text: e.title }), e.detail ? el("div", { class: "muted small", text: e.detail }) : null]),
+      el("td", {}, [button("", { cls: "sm danger", icon: "trash", label: "Delete", onclick: async () => {
+        await api.del("/api/timeline/" + e.id); await load(); } })])]));
+    tbl.append(tb); host.append(el("div", { class: "tablewrap" }, [tbl]));
+  }
 }
 
-/* ============================== Vault =========================== */
-async function vaultView(root) {
+async function caseReportTab(root, c) {
+  root.append(el("div", { class: "card" }, [
+    el("div", { class: "between" }, [
+      el("div", {}, [el("div", { class: "ch", text: "Court-ready investigation report" }),
+        el("div", { class: "cd", text: "A branded, print-ready document with case metadata, findings and provenance, timeline, methodology, and a tamper-evident chain-of-custody block. Print to PDF from the report window." })]),
+      icon("doc", "lg"),
+    ]),
+    el("div", { class: "row", style: "margin-top:16px" }, [
+      button("Open report", { cls: "primary", icon: "doc", onclick: () => window.open("/api/cases/" + c.id + "/report", "_blank") }),
+      button("Export JSON", { cls: "ghost sm", icon: "database", onclick: () =>
+        window.open("/api/reports/export?case_id=" + c.id + "&format=json", "_blank") }),
+      button("Export Markdown", { cls: "ghost sm", icon: "doc", onclick: () =>
+        window.open("/api/reports/export?case_id=" + c.id + "&format=md", "_blank") }),
+    ]),
+  ]));
+  const box = el("div", { class: "mt" }); root.append(box);
+  try {
+    const v = await api.get("/api/audit/verify");
+    box.append(el("div", { class: "callout " + (v.ok ? "brand" : "bad") }, [icon(v.ok ? "shield" : "alert"),
+      el("div", { html: v.ok
+        ? `<b>Chain of custody intact.</b> The tamper-evident audit trail (${v.count} entries) verifies — this integrity attestation is embedded in the report.`
+        : `<b>Audit chain broken</b> at entry #${v.broken_at}. The report will flag this.` })]));
+  } catch {}
+}
+
+/* ================================ Sources ============================== */
+async function sourcesView(root) {
+  root.append(...pageHead("Sources & keys",
+    "Add API keys to unlock more data providers. Keyless sources work immediately. Keys are encrypted at rest."));
   const st = await api.get("/api/vault/status");
   const provs = await api.get("/api/providers");
+  const configured = provs.filter(p => p.configured || (!p.requires_key && !p.vault_key)).length;
 
-  const stateRow = el("div", { class: "card", style: "margin-bottom:14px" });
-  function renderState() {
-    clear(stateRow);
-    const locked = st.mode === "encrypted" && !st.unlocked;
-    stateRow.append(el("div", { class: "row" }, [
-      el("span", {}, [el("span", { class: "dot " + (st.mode === "plaintext" ? "bad" : st.unlocked ? "warn" : "ok") }),
-        " ", el("b", { text: st.mode === "plaintext" ? "Plaintext (not encrypted)" : st.unlocked ? "Unlocked" : "Locked" })]),
-      el("div", { class: "spacer" }),
-    ]));
-    if (st.mode === "encrypted") {
-      const pass = el("input", { type: "password", placeholder: "passphrase", style: "max-width:200px" });
-      const row = el("div", { class: "row", style: "margin-top:10px" }, [pass]);
-      if (locked) row.append(button("Unlock", { cls: "primary", onclick: async () => {
-        try { Object.assign(st, await api.post("/api/vault/unlock", { passphrase: pass.value })); toast("Unlocked"); rerender(); }
-        catch (e) { toast(e.message, true); } } }));
-      else row.append(button("Lock", { onclick: async () => { Object.assign(st, await api.post("/api/vault/lock")); toast("Locked"); rerender(); } }));
-      stateRow.append(row);
-      stateRow.append(el("div", { class: "small muted", style: "margin-top:8px" },
-        ["Keys are AES-256-GCM encrypted (PBKDF2-SHA256, 200k). The passphrase is never stored. " +
-         `Auto-locks after ${st.idle_minutes} min idle.`]));
-    }
+  root.append(el("div", { class: "stats mb" }, [
+    stat(configured + " / " + provs.length, "Sources ready", "key", "accent"),
+    stat(provs.filter(p => !p.requires_key && !p.vault_key).length, "Keyless", "check"),
+    stat(st.mode === "plaintext" ? "OFF" : (st.unlocked ? "UNLOCKED" : "LOCKED"), "Vault", st.unlocked || st.mode === "plaintext" ? "unlock" : "lock"),
+  ]));
+
+  if (st.mode === "encrypted") {
+    const locked = !st.unlocked;
+    const pass = el("input", { type: "password", placeholder: "vault passphrase", style: "max-width:240px" });
+    const row = el("div", { class: "row" }, [pass]);
+    if (locked) row.append(button("Unlock vault", { cls: "primary", icon: "unlock", onclick: async () => {
+      try { await api.post("/api/vault/unlock", { passphrase: pass.value }); toast("Vault unlocked"); rerender(); }
+      catch (e) { toast(e.message, true); } }}));
+    else row.append(button("Lock vault", { cls: "ghost", icon: "lock", onclick: async () => {
+      await api.post("/api/vault/lock"); toast("Vault locked"); rerender(); } }));
+    root.append(el("div", { class: "callout" }, [icon(locked ? "lock" : "unlock"),
+      el("div", {}, [el("div", { html: locked
+        ? "The key vault is <b>locked</b>. Unlock it to add or edit provider keys."
+        : "Vault <b>unlocked</b>. Keys are AES-256-GCM encrypted; the passphrase is never stored and auto-locks when idle." }),
+        el("div", { class: "mt" }, [row])])]));
   }
-  renderState();
-  root.append(el("h2", { text: "API Vault" }), stateRow);
 
   const editable = st.mode === "plaintext" || st.unlocked;
-  root.append(el("div", { class: "small muted", style: "margin:0 0 12px" },
-    ["This is where API keys go. Enter each provider's key and press Save; tap " +
-     "“Get key ↗” to open where to sign up for it. Keyless providers (crt.sh) work with no key. " +
-     (st.mode === "encrypted" && !st.unlocked ? "Unlock the vault above to add or edit keys." : "")]));
-  const grid = el("div", { class: "grid" });
-  root.append(grid);
+  root.append(el("div", { class: "h-sec" }, [icon("key"), "Data providers"]));
+  const grid = el("div", { class: "grid" }); root.append(grid);
   for (const p of provs) {
-    if (!p.vault_key && !p.requires_key) { grid.append(keylessCard(p)); continue; }
-    grid.append(providerKeyCard(p, editable));
+    if (!p.vault_key && !p.requires_key) grid.append(keylessCard(p));
+    else grid.append(providerKeyCard(p, editable));
   }
 }
 
 function keylessCard(p) {
   return el("div", { class: "card" }, [
-    el("div", { class: "ch" }, [el("span", {}, [el("b", { text: p.name }), " ", el("span", { class: "tag ok", text: "keyless" })]),
-      button("Test", { cls: "sm ghost", onclick: () => testProvider(p.name) })]),
+    el("div", { class: "ch" }, [el("span", { style: "display:flex;gap:8px;align-items:center" },
+      [el("b", { text: p.name }), el("span", { class: "tag ok", text: "keyless" })]),
+      button("Test", { cls: "sm ghost", icon: "check", onclick: () => testProvider(p.name) })]),
     el("div", { class: "cd", text: "accepts: " + p.input_types.join(", ") }),
   ]);
 }
 
 function providerKeyCard(p, editable) {
-  const inp = el("input", { type: "password", placeholder: p.needs_two_part ? "id:secret" : "API key",
-                            disabled: !editable });
+  const inp = el("input", { type: "password", placeholder: p.needs_two_part ? "id:secret" : "API key", disabled: !editable ? "disabled" : null });
   const head = el("div", { class: "ch" }, [
-    el("span", {}, [el("b", { text: p.name }), " ",
+    el("span", { style: "display:flex;gap:8px;align-items:center" }, [el("b", { text: p.name }),
       el("span", { class: "tag " + (p.configured ? "ok" : "warn"), text: p.configured ? "set" : "needs key" })]),
     el("span", { class: "tag", text: p.input_types.join(",") }),
   ]);
-  const actions = el("div", { class: "row", style: "margin-top:10px" }, [
+  const actions = el("div", { class: "row", style: "margin-top:12px" }, [
     button("Save", { cls: "sm primary", onclick: async () => {
-      if (!inp.value) return; try { await api.put(`/api/vault/keys/${p.vault_key}`, { value: inp.value });
-        toast("Saved"); inp.value = ""; rerender(); } catch (e) { toast(e.message, true); } }, }),
-    button("Test", { cls: "sm ghost", onclick: () => testProvider(p.name) }),
-    p.key_url ? el("a", { class: "btn sm ghost", href: p.key_url, target: "_blank",
-                          rel: "noopener noreferrer", text: "Get key ↗" }) : null,
-    p.configured ? button("Delete", { cls: "sm danger", onclick: async () => {
-      await api.del(`/api/vault/keys/${p.vault_key}`); toast("Deleted"); rerender(); } }) : null,
+      if (!inp.value) return; try { await api.put("/api/vault/keys/" + p.vault_key, { value: inp.value });
+        toast("Key saved"); inp.value = ""; rerender(); } catch (e) { toast(e.message, true); } } }),
+    button("Test", { cls: "sm ghost", icon: "check", onclick: () => testProvider(p.name) }),
+    p.key_url ? el("a", { class: "btn sm ghost", href: p.key_url, target: "_blank", rel: "noopener noreferrer" },
+      [icon("external", "sm"), el("span", { text: "Get key" })]) : null,
+    p.configured ? button("", { cls: "sm danger", icon: "trash", label: "Delete key", onclick: async () => {
+      await api.del("/api/vault/keys/" + p.vault_key); toast("Deleted"); rerender(); } }) : null,
   ]);
   return el("div", { class: "card" }, [head, field("Key", inp), actions]);
 }
 
 async function testProvider(name) {
   toast("Testing " + name + "…");
-  try { const r = await api.post(`/api/providers/${name}/test`); toast(name + (r.ok ? ": OK" : ": " + (r.error || "failed")), !r.ok); }
+  try { const r = await api.post("/api/providers/" + name + "/test");
+    toast(name + (r.ok ? ": OK" : ": " + (r.error || "failed")), !r.ok); }
   catch (e) { toast(name + ": " + e.message, true); }
 }
 
-/* ============================== Jobs =========================== */
+/* =============================== Analytics ============================= */
+async function analyticsView(root) {
+  root.append(...pageHead("Analytics", "Live metrics computed from your investigations — no fabricated numbers."));
+  const host = el("div"); root.append(host); host.append(skeleton(3));
+  const [o, a] = await Promise.all([api.get("/api/overview"), api.get("/api/analytics")]);
+  clear(host);
+  host.append(el("div", { class: "stats" }, [
+    stat(o.cases, "Cases", "cases", "accent"), stat(o.cases_open, "Open", "cases"),
+    stat(a.findings_total, "Findings", "search"), stat(a.findings_hits, "Positive hits", "alert", a.findings_hits ? "badc" : ""),
+    stat(o.accounts_without_2fa, "Accounts w/o 2FA", "lock", o.accounts_without_2fa ? "warnc" : ""),
+    stat(o.jobs_total, "Jobs run", "activity"),
+  ]));
+  host.append(el("div", { class: "grid two", style: "margin-top:18px" }, [
+    chartCard("Hit rate", ringChart(a.hit_rate, (a.findings_hits) + " of " + a.findings_total + " findings")),
+    chartCard("Findings by source", a.findings_by_source.length ? barChart(a.findings_by_source) : emptyMini()),
+    chartCard("Findings by target type", a.findings_by_type.length ? barChart(a.findings_by_type) : emptyMini()),
+    chartCard("Cases by status", a.cases_by_status.length ? barChart(a.cases_by_status) : emptyMini()),
+  ]));
+  if (o.breached_emails.length)
+    host.append(el("div", { class: "callout bad", style: "margin-top:18px" }, [icon("alert"),
+      el("div", { html: "<b>Emails seen in breaches:</b> " + o.breached_emails.map(e => escapeHtml(e)).join(", ") })]));
+}
+function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function chartCard(title, content) {
+  return el("div", { class: "card" }, [el("div", { class: "ch mb", text: title }), content]);
+}
+function emptyMini() { return el("div", { class: "muted small", text: "No data yet." }); }
+function barChart(items) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  return el("div", { class: "barchart" }, items.map(it => el("div", { class: "bar-row" }, [
+    el("div", { class: "bar-lbl", text: it.label, title: it.label }),
+    el("div", { class: "bar-track" }, [el("div", { class: "bar-fill", style: `width:${Math.round(it.value / max * 100)}%` })]),
+    el("div", { class: "bar-val", text: String(it.value) }),
+  ])));
+}
+function ringChart(pct, label) {
+  const r = 34, C = 2 * Math.PI * r;
+  const svg = svgEl("svg", { width: 88, height: 88, class: "ring", viewBox: "0 0 88 88" });
+  svg.append(svgEl("circle", { class: "track", cx: 44, cy: 44, r, "stroke-width": 9 }));
+  svg.append(svgEl("circle", { class: "val", cx: 44, cy: 44, r, "stroke-width": 9,
+    "stroke-dasharray": C, "stroke-dashoffset": C * (1 - pct) }));
+  return el("div", { style: "display:flex;align-items:center;gap:16px" }, [svg,
+    el("div", {}, [el("div", { style: "font-size:26px;font-weight:800", text: Math.round(pct * 100) + "%" }),
+      el("div", { class: "muted small", text: label })])]);
+}
+
+/* ============================== Audit trail =========================== */
+async function auditView(root) {
+  root.append(...pageHead("Audit trail",
+    "A tamper-evident, hash-chained record of every security-relevant action. Verify integrity at any time."));
+  const banner = el("div"); root.append(banner);
+  const host = el("div"); root.append(host); host.append(skeleton(3));
+  async function load() {
+    const data = await api.get("/api/audit?limit=250");
+    clear(banner); clear(host);
+    const v = data.integrity;
+    banner.append(el("div", { class: "callout " + (v.ok ? "brand" : "bad"), style: "margin-bottom:16px" }, [
+      icon(v.ok ? "shield" : "alert"),
+      el("div", { style: "flex:1" }, [el("div", { html: v.ok
+        ? `<b>Integrity verified.</b> ${v.count} entries; the SHA-256 hash chain is intact.`
+        : `<b>Tampering detected</b> at entry #${v.broken_at}. The chain no longer verifies.` }),
+        el("div", { class: "mono small muted", style: "margin-top:4px", text: "tip: " + (v.tip || "").slice(0, 32) + "…" })]),
+      button("Verify now", { cls: "sm", icon: "refresh", onclick: async () => {
+        const r = await api.get("/api/audit/verify"); toast(r.ok ? "Chain verified ✓" : "Chain broken at #" + r.broken_at, !r.ok); } }),
+    ]));
+    if (!data.entries.length) return host.append(emptyState("shield", "No audit entries yet", "Actions you take are recorded here."));
+    const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Time (UTC)" }),
+      el("th", { text: "Actor" }), el("th", { text: "Category" }), el("th", { text: "Action" }), el("th", { text: "Hash" })])])]);
+    const tb = el("tbody");
+    for (const e of data.entries) tb.append(el("tr", {}, [
+      el("td", { class: "small muted", text: (e.ts || "").replace("T", " ") }),
+      el("td", { text: e.actor || "—" }), el("td", {}, [el("span", { class: "tag", text: e.category || "—" })]),
+      el("td", { text: e.action }), el("td", { class: "mono small muted", text: e.hash_short })]));
+    tbl.append(tb); host.append(el("div", { class: "tablewrap" }, [tbl]));
+  }
+  await load();
+}
+
+/* ============================== Activity/Jobs ========================= */
 async function jobsView(root) {
-  root.append(el("h2", { text: "Recent jobs" }));
-  root.append(el("div", { class: "viewhint", text:
-    "Every tool run and provider lookup appears here with live status. Tap a row to see its output." }));
-  const wrap = el("div");
-  root.append(wrap);
+  root.append(...pageHead("Activity", "Every tool run and provider lookup, with live status. Tap a row to view output."));
+  const wrap = el("div"); root.append(wrap);
   async function load() {
     clear(wrap);
     const jobs = await api.get("/api/jobs?limit=80");
-    if (!jobs.length) { wrap.append(el("div", { class: "empty", text: "No jobs yet." })); return; }
-    const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [
-      el("th", { text: "" }), el("th", { text: "kind" }), el("th", { text: "name" }),
-      el("th", { text: "target" }), el("th", { text: "status" }), el("th", { text: "when" })])])]);
+    if (!jobs.length) return wrap.append(emptyState("activity", "No activity yet", "Runs appear here when you investigate."));
+    const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "" }), el("th", { text: "Kind" }),
+      el("th", { text: "Name" }), el("th", { text: "Target" }), el("th", { text: "Status" }), el("th", { text: "When" })])])]);
     const tb = el("tbody");
     for (const j of jobs) {
-      const tr = el("tr", { onclick: () => showJob(j.id) }, [
-        el("td", {}, [statusDot(j.status)]), el("td", { text: j.kind }), el("td", { text: j.name }),
-        el("td", { text: j.target }), el("td", { text: j.status }),
+      const tr = el("tr", { class: "click", onclick: () => showJob(j.id) }, [
+        el("td", {}, [statusDot(j.status)]), el("td", {}, [el("span", { class: "tag", text: j.kind })]),
+        el("td", { text: j.name }), el("td", { text: j.target }), el("td", { text: j.status }),
         el("td", { class: "small muted", text: (j.created_at || "").replace("T", " ") })]);
-      tr.style.cursor = "pointer";
       tb.append(tr);
     }
-    tbl.append(tb); wrap.append(tbl);
+    tbl.append(tb); wrap.append(el("div", { class: "tablewrap" }, [tbl]));
   }
   await load();
   const timer = setInterval(load, 4000); onDispose(() => clearInterval(timer));
 }
-
 async function showJob(id) {
-  const j = await api.get(`/api/jobs/${id}`);
-  const pre = el("pre", { class: "out", text: j.output || j.error || "(no output)" });
-  const box = el("div", { class: "card", style: "margin:12px 0" }, [
-    el("div", { class: "ch" }, [el("span", {}, [statusDot(j.status), " ", el("b", { text: j.name }), " — ", j.target]),
-      button("✕", { cls: "sm ghost", onclick: () => box.remove() })]),
-    pre,
+  const j = await api.get("/api/jobs/" + id);
+  modal(j.name + " · " + j.target, j.status + (j.error ? " — " + j.error : ""),
+    [el("pre", { class: "out", text: j.output || j.error || "(no output)" })],
+    [button("Close", { cls: "primary", onclick: function () { this.closest(".modal-back").remove(); } })]);
+}
+
+/* ================================ Tools =============================== */
+async function toolsView(root) {
+  topActions(button("Add custom", { cls: "sm primary", icon: "plus", onclick: () => addCustom() }));
+  root.append(...pageHead("Tools", "OSINT command-line tools GoFindMe can run for you. Install/update the ones you need."));
+  const mgr = await api.get("/api/tools/managers").catch(() => ({ allowed: false, available: {} }));
+  root.append(el("div", { class: "callout" }, [icon("tool"), el("div", { text: mgr.allowed
+    ? "Package managers detected: " + Object.entries(mgr.available).map(([m, ok]) => `${m} ${ok ? "✓" : "✗"}`).join("   ")
+    : "In-app installs are disabled in this build. Install tools on the host and they'll be auto-detected here." })]));
+  const grid = el("div", { class: "grid" }); root.append(grid); grid.append(skeleton(4));
+  const tools = await api.get("/api/tools");
+  clear(grid);
+  for (const t of tools) grid.append(toolCard(t, mgr));
+}
+function toolCard(t, mgr) {
+  const head = el("div", { class: "ch" }, [
+    el("span", { style: "display:flex;gap:8px;align-items:center" }, [el("b", { text: t.name }),
+      el("span", { class: "tag", text: t.interactive ? "GUI" : (t.source === "custom" ? "custom" : "cli") })]),
+    el("span", { class: "tag " + (t.available ? "ok" : "warn"), text: t.available ? "installed" : "missing" }),
   ]);
-  const root = document.getElementById("view");
-  root.insertBefore(box, root.firstChild);
+  const meta = el("div", { class: "cd" }, [`accepts: ${(t.accepts || []).join(", ") || "—"}`,
+    t.install_method !== "none" ? el("div", { text: `via ${t.install_method}` }) : null]);
+  const actions = el("div", { class: "row", style: "margin-top:12px" });
+  if (t.url) actions.append(el("a", { class: "btn sm ghost", href: t.url, target: "_blank", rel: "noopener noreferrer" },
+    [icon("external", "sm"), el("span", { text: "Home" })]));
+  if (t.key_url) actions.append(el("a", { class: "btn sm ghost", href: t.key_url, target: "_blank", rel: "noopener noreferrer" },
+    [icon("key", "sm"), el("span", { text: "Get key" })]));
+  if (t.available) actions.append(button("Version", { cls: "sm ghost", onclick: () => manage(t.name, "version") }));
+  if (mgr.allowed && t.install_method !== "none" && mgr.available[t.install_method])
+    actions.append(button(t.available ? "Update" : "Install", { cls: "sm", icon: "refresh",
+      onclick: () => manage(t.name, t.available ? "update" : "install") }));
+  if (t.interactive) actions.append(button("Copy command", { cls: "sm ghost", icon: "copy", onclick: () => {
+    navigator.clipboard.writeText(t.run_template.replace("{bin}", t.bin)); toast("Copied"); } }));
+  if (t.source === "custom") actions.append(button("", { cls: "sm danger", icon: "trash", label: "Delete", onclick: async () => {
+    if (!confirmAction(`Delete custom tool ${t.name}?`)) return;
+    await api.del("/api/tools/custom/" + t.name); toast("Deleted"); rerender(); } }));
+  return el("div", { class: "card" }, [head, meta, actions]);
+}
+async function manage(name, action) {
+  try { await api.post("/api/tools/" + name + "/" + action); toast(action + " started"); location.hash = "#/jobs"; }
+  catch (e) { toast(e.message, true); }
+}
+function addCustom() {
+  const f = { name: el("input", { placeholder: "mytool" }), bin: el("input", { placeholder: "executable on PATH" }),
+    accepts: el("input", { placeholder: "username, domain (comma-separated)" }),
+    run_template: el("input", { placeholder: "{bin} -u {target}" }),
+    install_method: el("select", {}, ["none", "pip", "pipx", "go", "git", "npm"].map(m => el("option", { value: m, text: m }))),
+    install_ref: el("input", { placeholder: "package / module@version / repo url" }) };
+  const m = modal("Add custom tool", "Register any CLI tool that takes a target argument.",
+    [el("div", { class: "col" }, [field("Name", f.name), field("Binary", f.bin), field("Accepts types", f.accepts),
+      field("Run template (must include {target})", f.run_template), field("Install method", f.install_method),
+      field("Install reference", f.install_ref)])],
+    [button("Cancel", { cls: "ghost", onclick: () => m.close() }),
+     button("Save", { cls: "primary", onclick: async () => {
+       const accepts = f.accepts.value.split(",").map(s => s.trim()).filter(Boolean);
+       try { await api.post("/api/tools/custom", { name: f.name.value.trim(), bin: f.bin.value.trim(), accepts,
+         categories: accepts, run_template: f.run_template.value.trim(), install_method: f.install_method.value,
+         install_ref: f.install_ref.value.trim() || null });
+         m.close(); toast("Saved"); rerender(); } catch (e) { toast(e.message, true); }
+     } })]);
 }
 
-/* ============================== Logs =========================== */
-async function logsView(root) {
-  root.append(el("h2", { text: "Audit & activity logs" }));
-  root.append(el("div", { class: "viewhint", text:
-    "Audit trail of logins, vault unlocks, and every tool/provider call. API keys are never logged." }));
-  const rows = await api.get("/api/logs?limit=300");
-  if (!rows.length) return root.append(el("div", { class: "empty", text: "No logs yet." }));
-  const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [
-    el("th", { text: "time" }), el("th", { text: "level" }), el("th", { text: "cat" }), el("th", { text: "message" })])])]);
-  const tb = el("tbody");
-  for (const r of rows)
-    tb.append(el("tr", {}, [el("td", { class: "small muted", text: (r.ts || "").replace("T", " ") }),
-      el("td", { text: r.level }), el("td", { text: r.category || "" }), el("td", { text: r.message })]));
-  tbl.append(tb); root.append(tbl);
+/* ================================ Data ================================ */
+async function dataView(root, params) {
+  const sub = params[0] || "identity";
+  root.append(...pageHead("Reference data", "Identities, accounts, and notes you maintain across investigations."));
+  const TABS = [["identity", "Identities"], ["accounts", "Accounts"], ["notes", "Notes"]];
+  root.append(el("div", { class: "subtabs" }, TABS.map(([k, label]) =>
+    el("button", { class: "subtab" + (k === sub ? " active" : ""), onclick: () => (location.hash = "#/data/" + k) },
+      [el("span", { text: label })]))));
+  const body = el("div"); root.append(body);
+  await DATA_CRUD[sub](body);
 }
 
-/* ============================ Settings ========================== */
-async function settingsView(root) {
-  const h = await api.get("/api/health");
-  root.append(el("h2", { text: "Settings & system" }));
-  root.append(el("div", { class: "card" }, [
-    el("div", { text: `Version: ${h.version}` }),
-    el("div", { text: `Vault mode: ${h.vault_mode} (${h.vault_unlocked ? "unlocked" : "locked"})` }),
-    el("div", { text: `Data folder: ${h.data_dir || "—"}` }),
-    el("div", { class: "small muted", text: `Database file: ${h.db_path || "—"} (your data persists here between runs)` }),
-    h.packaged ? el("div", { class: "small muted", style: "margin-top:8px",
-      text: "Packaged app: tool installs use your system Python/Go (install Python from python.org and " +
-            "Go from go.dev to enable them). Installed tools are detected from your PATH and the Python/Go " +
-            "script dirs. The API providers need no tools at all — just keys." }) : null,
-    el("div", { class: "small muted", style: "margin-top:8px",
-      html: 'Legacy single-file launcher is preserved at <a href="/legacy" target="_blank">/legacy</a>.' }),
-  ]));
-  root.append(el("h2", { text: "Importers (planned)" }));
-  const ig = el("div", { class: "grid" });
-  for (const k of ["browser", "cloud", "file"])
-    ig.append(el("div", { class: "card" }, [el("div", { class: "ch" }, [el("span", { text: k + " import" }), el("span", { class: "tag", text: "planned" })]),
-      el("div", { class: "cd", text: "Endpoint scaffolded; returns 501 until implemented." })]));
-  root.append(ig);
-}
-
-/* ====================== Generic CRUD views ===================== */
 function crudView(opts) {
   return async function (root) {
-    root.append(el("h2", { text: opts.title }));
-    if (opts.hint) root.append(el("div", { class: "viewhint", text: opts.hint }));
-    const formHost = el("div");
-    const listHost = el("div");
+    const formHost = el("div"); const listHost = el("div");
     root.append(formHost, listHost);
-    renderForm();
-    await load();
-
+    renderForm(); await load();
     function renderForm() {
       clear(formHost);
       const inputs = {};
       const rows = opts.fields.map(fl => {
         let inp;
-        if (fl.type === "select") inp = el("select", {}, fl.options.map(o => el("option", { value: o, text: o })));
+        if (fl.type === "select") inp = el("select", {}, fl.options.map(o => el("option", { value: o, text: o || "—" })));
         else if (fl.type === "textarea") inp = el("textarea", { placeholder: fl.label });
         else inp = el("input", { placeholder: fl.label, type: fl.type || "text" });
-        inputs[fl.key] = inp;
-        return field(fl.label, inp);
+        inputs[fl.key] = inp; return field(fl.label, inp);
       });
-      const card = el("div", { class: "card", style: "margin-bottom:16px" },
-        [...rows, el("div", { class: "row", style: "margin-top:10px" },
-          [button("Add", { cls: "primary", onclick: add })])]);
-      formHost.append(card);
+      formHost.append(el("div", { class: "card mb" }, [...rows,
+        el("div", { class: "row mt" }, [button("Add", { cls: "primary sm", icon: "plus", onclick: add })])]));
       async function add() {
         const body = {};
         for (const fl of opts.fields) {
@@ -481,73 +758,60 @@ function crudView(opts) {
     async function load() {
       clear(listHost);
       const rows = await api.get(opts.path);
-      if (!rows.length) { listHost.append(el("div", { class: "empty", text: "Nothing yet." })); return; }
-      const tbl = el("table", {}, [el("thead", {}, [el("tr", {},
-        [...opts.columns.map(c => el("th", { text: c.label })), el("th", { text: "" })])])]);
+      if (!rows.length) return listHost.append(emptyState("database", "Nothing yet", "Add your first entry above."));
+      const tbl = el("table", {}, [el("thead", {}, [el("tr", {}, [...opts.columns.map(c => el("th", { text: c.label })), el("th", { text: "" })])])]);
       const tb = el("tbody");
-      for (const r of rows) {
-        const tr = el("tr", {}, [
-          ...opts.columns.map(c => el("td", { text: fmt(r[c.key]) })),
-          el("td", {}, [button("✕", { cls: "sm danger", onclick: async () => {
-            if (!confirmAction("Delete this entry?")) return;
-            await api.del(`${opts.path}/${r.id}`); await load(); } })]),
-        ]);
-        tb.append(tr);
-      }
-      tbl.append(tb); listHost.append(tbl);
+      for (const r of rows) tb.append(el("tr", {}, [...opts.columns.map(c => el("td", { text: r[c.key] == null ? "" : String(r[c.key]) })),
+        el("td", {}, [button("", { cls: "sm danger", icon: "trash", label: "Delete", onclick: async () => {
+          if (!confirmAction("Delete this entry?")) return; await api.del(`${opts.path}/${r.id}`); await load(); } })])]));
+      tbl.append(tb); listHost.append(el("div", { class: "tablewrap" }, [tbl]));
     }
   };
 }
-function fmt(v) { return v == null ? "" : String(v); }
-
-const identityView = crudView({
-  title: "Identity — emails, usernames, handles", path: "/api/identity",
-  hint: "Save the emails, usernames, and handles you're investigating (or your own). Stored on the server and shared across your devices.",
-  columns: [{ key: "kind", label: "kind" }, { key: "value", label: "value" }, { key: "label", label: "label" }],
-  fields: [
-    { key: "kind", label: "Kind", type: "select", options: ["email", "username", "handle", "realname", "phone", "domain"] },
-    { key: "value", label: "Value" }, { key: "label", label: "Label" }, { key: "notes", label: "Notes", type: "textarea" },
-  ],
-});
-const accountsView = crudView({
-  title: "Accounts & recovery status", path: "/api/accounts",
-  hint: "Track accounts you've found and their recovery status (2FA, recovery email/phone) — useful for auditing your own footprint.",
-  columns: [{ key: "service", label: "service" }, { key: "status", label: "status" },
-            { key: "has_2fa", label: "2FA" }, { key: "recovery_status", label: "recovery" }],
-  fields: [
-    { key: "service", label: "Service" }, { key: "url", label: "URL" },
-    { key: "status", label: "Status", type: "select", options: ["", "active", "closed", "unknown"] },
-    { key: "has_2fa", label: "2FA (1/0)", type: "select", options: ["", "1", "0"], coerce: "int" },
-    { key: "recovery_email", label: "Recovery email" }, { key: "recovery_phone", label: "Recovery phone" },
-    { key: "recovery_status", label: "Recovery status", type: "select", options: ["", "configured", "missing", "exposed", "unknown"] },
-    { key: "notes", label: "Notes", type: "textarea" },
-  ],
-});
-const timelineView = crudView({
-  title: "Digital timeline", path: "/api/timeline",
-  hint: "Build a timeline of accounts and devices over the years to reconstruct a footprint.",
-  columns: [{ key: "occurred_at", label: "when" }, { key: "event_type", label: "type" }, { key: "title", label: "title" }],
-  fields: [
-    { key: "event_type", label: "Type", type: "select", options: ["account_created", "device_added", "breach", "note"] },
-    { key: "occurred_at", label: "When (year or date)" }, { key: "title", label: "Title" },
-    { key: "detail", label: "Detail", type: "textarea" },
-  ],
-});
-const notesView = crudView({
-  title: "Case notes", path: "/api/notes",
-  hint: "Free-form notes. Everything here is included when you export a report.",
-  columns: [{ key: "body", label: "note" }, { key: "created_at", label: "created" }],
-  fields: [{ key: "body", label: "Note", type: "textarea" }],
-});
-
-export const VIEWS = {
-  dashboard, search: searchView, tools: toolsView, vault: vaultView,
-  identity: identityView, accounts: accountsView, timeline: timelineView, notes: notesView,
-  jobs: jobsView, logs: logsView, settings: settingsView,
+const DATA_CRUD = {
+  identity: crudView({ path: "/api/identity",
+    columns: [{ key: "kind", label: "Kind" }, { key: "value", label: "Value" }, { key: "label", label: "Label" }],
+    fields: [{ key: "kind", label: "Kind", type: "select", options: ["email", "username", "handle", "realname", "phone", "domain"] },
+      { key: "value", label: "Value" }, { key: "label", label: "Label" }, { key: "notes", label: "Notes", type: "textarea" }] }),
+  accounts: crudView({ path: "/api/accounts",
+    columns: [{ key: "service", label: "Service" }, { key: "status", label: "Status" }, { key: "has_2fa", label: "2FA" }, { key: "recovery_status", label: "Recovery" }],
+    fields: [{ key: "service", label: "Service" }, { key: "url", label: "URL" },
+      { key: "status", label: "Status", type: "select", options: ["", "active", "closed", "unknown"] },
+      { key: "has_2fa", label: "2FA (1/0)", type: "select", options: ["", "1", "0"], coerce: "int" },
+      { key: "recovery_email", label: "Recovery email" }, { key: "recovery_phone", label: "Recovery phone" },
+      { key: "recovery_status", label: "Recovery status", type: "select", options: ["", "configured", "missing", "exposed", "unknown"] }] }),
+  notes: crudView({ path: "/api/notes",
+    columns: [{ key: "body", label: "Note" }, { key: "created_at", label: "Created" }],
+    fields: [{ key: "body", label: "Note", type: "textarea" }] }),
 };
 
-let _rerender = () => {};
-export function setRerender(fn) { _rerender = fn; }
-function rerender() { _rerender(); }
+/* ================================ Settings ============================ */
+async function settingsView(root) {
+  root.append(...pageHead("Settings & system", "Deployment details and documentation."));
+  const h = await api.get("/api/health");
+  root.append(el("div", { class: "grid two" }, [
+    el("div", { class: "card" }, [el("div", { class: "ch mb", text: "System" }),
+      kv("Version", h.version), kv("Vault", h.vault_mode + (h.vault_unlocked ? " · unlocked" : " · locked")),
+      kv("Tool management", h.tool_mgmt ? "enabled" : "disabled"), kv("Packaged build", h.packaged ? "yes" : "no")]),
+    el("div", { class: "card" }, [el("div", { class: "ch mb", text: "Data" }),
+      kv("Data folder", h.data_dir || "—"), el("div", { class: "small muted", style: "margin-top:8px",
+        text: "Your cases, findings and audit trail persist in the database at " + (h.db_path || "—") + ". Back it up by copying that file while the server is stopped." })]),
+  ]));
+  root.append(el("div", { class: "h-sec" }, [icon("shield"), "Documentation"]));
+  root.append(el("div", { class: "grid" }, [
+    docCard("Security whitepaper", "Architecture, crypto, controls, and NIST 800-53 alignment.", "docs/SECURITY.md"),
+    docCard("Deployment guide", "On-prem, VPS, air-gapped, and desktop deployment.", "docs/DEPLOYMENT.md"),
+  ]));
+}
+function kv(k, v) { return el("div", { class: "row", style: "justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)" },
+  [el("span", { class: "muted small", text: k }), el("span", { class: "small", style: "font-weight:600;text-align:right;word-break:break-all", text: v })]); }
+function docCard(title, sub, path) {
+  return el("div", { class: "card" }, [el("div", { class: "ch", text: title }), el("div", { class: "cd", text: sub }),
+    el("div", { class: "mt", text: "See " + path + " in the repository." })]);
+}
 
-function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+export const VIEWS = {
+  investigate: investigateView, cases: casesView, case: caseView, sources: sourcesView,
+  analytics: analyticsView, audit: auditView, jobs: jobsView, tools: toolsView,
+  data: dataView, settings: settingsView,
+};
