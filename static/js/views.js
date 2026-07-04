@@ -47,7 +47,7 @@ async function investigateView(root) {
   const goBtn = button("Investigate", { cls: "primary", icon: "investigate", onclick: go });
   root.append(el("div", { class: "hero" }, [
     el("h2", { text: "Start an investigation" }),
-    el("p", { text: "Enter any identifier. GoFindMe opens a case, runs every available tool and data source against it, and organizes the results into a court-ready file." }),
+    el("p", { text: "Type in anything you want to look up — a username, email, domain, IP, phone, or name. GoFindMe opens a case, runs every tool and data source it can against it, and puts the results into one clean report you can save or share." }),
     el("div", { class: "searchbar" }, [
       el("div", { class: "inpwrap" }, [icon("search"), input]), goBtn]),
     detected,
@@ -120,7 +120,7 @@ function miniStat(n, l) {
 async function casesView(root) {
   topActions(button("New case", { cls: "primary sm", icon: "plus", onclick: newCaseModal }));
   root.append(...pageHead("Investigations",
-    "Every investigation is a case: scoped evidence, examiner, legal authority, and a court-ready report."));
+    "Each thing you look into is its own case — all its findings, notes, and a clean report kept together in one place."));
   const host = el("div"); root.append(host); host.append(skeleton(3));
   const cs = await api.get("/api/cases");
   clear(host);
@@ -133,18 +133,18 @@ async function casesView(root) {
 
 function newCaseModal() {
   const f = {
-    title: el("input", { placeholder: "Investigation title" }),
-    subject: el("input", { placeholder: "Primary subject (optional)" }),
-    subject_type: el("select", {}, [el("option", { value: "", text: "auto / n/a" }),
+    title: el("input", { placeholder: "Name this investigation" }),
+    subject: el("input", { placeholder: "Who or what you're looking into (optional)" }),
+    subject_type: el("select", {}, [el("option", { value: "", text: "auto-detect" }),
       ...TARGET_TYPES.map(t => el("option", { value: t, text: t }))]),
-    examiner: el("input", { placeholder: "Examiner / analyst name" }),
-    authority: el("input", { placeholder: "Legal authority / authorization ref" }),
+    examiner: el("input", { placeholder: "Your name (optional)" }),
+    authority: el("input", { placeholder: "Authorization / case # (optional)" }),
     priority: el("select", {}, ["normal", "low", "high", "urgent"].map(p => el("option", { value: p, text: p }))),
   };
-  const m = modal("New investigation", "Open a case to scope evidence and generate a report.",
-    [el("div", { class: "col" }, [field("Title", f.title), field("Subject", f.subject),
-      field("Subject type", f.subject_type), field("Examiner", f.examiner),
-      field("Legal authority", f.authority), field("Priority", f.priority)])],
+  const m = modal("New investigation", "Open a case to keep everything about it in one place.",
+    [el("div", { class: "col" }, [field("Name", f.title), field("Subject", f.subject),
+      field("Subject type", f.subject_type), field("Your name", f.examiner),
+      field("Authorization", f.authority), field("Priority", f.priority)])],
     [button("Cancel", { cls: "ghost", onclick: () => m.close() }),
      button("Create case", { cls: "primary", onclick: async () => {
        try {
@@ -200,7 +200,7 @@ function caseHeader(c) {
     ]),
     el("div", { class: "meta" }, [
       metaItem("Subject", (c.subject || "—") + (c.subject_type ? " (" + c.subject_type + ")" : "")),
-      metaItem("Examiner", c.examiner), metaItem("Legal authority", c.authority),
+      metaItem("Investigator", c.examiner), metaItem("Authorization", c.authority),
       metaItem("Findings", String(counts.findings || 0) + " · " + (counts.hits || 0) + " hits"),
       metaItem("Opened", (c.created_at || "").replace("T", " ")),
     ]),
@@ -222,13 +222,13 @@ async function caseOverview(root, c) {
     stat(counts.notes || 0, "Notes", "doc"),
   ]));
 
-  root.append(el("div", { class: "h-sec" }, [icon("investigate"), "Run sources against this subject"]));
+  root.append(el("div", { class: "h-sec" }, [icon("investigate"), "Search this subject"]));
   const inp = el("input", { value: c.subject || "", placeholder: "target", style: "max-width:340px" });
   const tsel = el("select", { style: "max-width:150px" }, [el("option", { value: "", text: "auto" }),
     ...TARGET_TYPES.map(t => el("option", { value: t, text: t, selected: t === c.subject_type ? "selected" : null }))]);
   root.append(el("div", { class: "row" }, [inp, tsel,
-    button("Run Search-All", { cls: "primary", icon: "search", onclick: async () => {
-      const target = inp.value.trim(); if (!target) return toast("Enter a target", true);
+    button("Search everything", { cls: "primary", icon: "search", onclick: async () => {
+      const target = inp.value.trim(); if (!target) return toast("Enter something to search", true);
       try { await api.post("/api/cases/" + c.id + "/search", { target, type: tsel.value || null });
         toast("Search started"); location.hash = "#/case/" + c.id + "/findings"; }
       catch (e) { toast(e.message, true); }
@@ -239,8 +239,8 @@ async function caseOverview(root, c) {
     ["open", "active", "closed", "archived"].map(s => el("option", { value: s, text: s, selected: s === c.status ? "selected" : null })));
   const prioSel = el("select", { style: "max-width:150px" },
     ["low", "normal", "high", "urgent"].map(p => el("option", { value: p, text: p, selected: p === c.priority ? "selected" : null })));
-  const exam = el("input", { value: c.examiner || "", placeholder: "Examiner", style: "max-width:220px" });
-  const auth = el("input", { value: c.authority || "", placeholder: "Legal authority", style: "max-width:260px" });
+  const exam = el("input", { value: c.examiner || "", placeholder: "Your name", style: "max-width:220px" });
+  const auth = el("input", { value: c.authority || "", placeholder: "Authorization", style: "max-width:260px" });
   root.append(el("div", { class: "row" }, [statusSel, prioSel, exam, auth,
     button("Save", { cls: "sm primary", onclick: async () => {
       try { await api.put("/api/cases/" + c.id, { status: statusSel.value, priority: prioSel.value,
@@ -449,15 +449,15 @@ async function caseTimeline(root, c) {
 async function caseReportTab(root, c) {
   root.append(el("div", { class: "card" }, [
     el("div", { class: "between" }, [
-      el("div", {}, [el("div", { class: "ch", text: "Court-ready investigation report" }),
-        el("div", { class: "cd", text: "A branded, print-ready document with case metadata, findings and provenance, timeline, methodology, and a tamper-evident chain-of-custody block. Print to PDF from the report window." })]),
+      el("div", {}, [el("div", { class: "ch", text: "Investigation report" }),
+        el("div", { class: "cd", text: "A clean, printable report with everything from this case — the findings and where they came from, related domains, timeline, and a built-in integrity check. Open it, then Print → Save as PDF." })]),
       icon("doc", "lg"),
     ]),
     el("div", { class: "row", style: "margin-top:16px" }, [
       button("Open report", { cls: "primary", icon: "doc", onclick: () => window.open("/api/cases/" + c.id + "/report", "_blank") }),
-      button("Export JSON", { cls: "ghost sm", icon: "database", onclick: () =>
+      button("Download JSON", { cls: "ghost sm", icon: "database", onclick: () =>
         window.open("/api/reports/export?case_id=" + c.id + "&format=json", "_blank") }),
-      button("Export Markdown", { cls: "ghost sm", icon: "doc", onclick: () =>
+      button("Download Markdown", { cls: "ghost sm", icon: "doc", onclick: () =>
         window.open("/api/reports/export?case_id=" + c.id + "&format=md", "_blank") }),
     ]),
   ]));
@@ -466,15 +466,15 @@ async function caseReportTab(root, c) {
     const v = await api.get("/api/audit/verify");
     box.append(el("div", { class: "callout " + (v.ok ? "brand" : "bad") }, [icon(v.ok ? "shield" : "alert"),
       el("div", { html: v.ok
-        ? `<b>Chain of custody intact.</b> The tamper-evident audit trail (${v.count} entries) verifies — this integrity attestation is embedded in the report.`
-        : `<b>Audit chain broken</b> at entry #${v.broken_at}. The report will flag this.` })]));
+        ? `<b>Integrity check passed.</b> All ${v.count} logged actions are intact and unaltered — the report shows this too.`
+        : `<b>Integrity check failed</b> at entry #${v.broken_at}. The report will flag this.` })]));
   } catch {}
 }
 
 /* ================================ Sources ============================== */
 async function sourcesView(root) {
   root.append(...pageHead("Sources & keys",
-    "Add API keys to unlock more data providers. Keyless sources work immediately. Keys are encrypted at rest."));
+    "Add API keys to turn on more data sources. Free sources work right away; paid ones need a key. Your keys are encrypted and stored safely."));
   const st = await api.get("/api/vault/status");
   const provs = await api.get("/api/providers");
   const configured = provs.filter(p => p.configured || (!p.requires_key && !p.vault_key)).length;
@@ -502,20 +502,41 @@ async function sourcesView(root) {
   }
 
   const editable = st.mode === "plaintext" || st.unlocked;
-  root.append(el("div", { class: "h-sec" }, [icon("key"), "Data providers"]));
-  const grid = el("div", { class: "grid" }); root.append(grid);
-  for (const p of provs) {
-    if (!p.vault_key && !p.requires_key) grid.append(keylessCard(p));
-    else grid.append(providerKeyCard(p, editable));
-  }
+  const isFree = p => p.pricing === "free" || p.pricing === "freemium";
+  const renderGroup = (title, sub, list) => {
+    if (!list.length) return;
+    root.append(el("div", { class: "h-sec" }, [icon("key"), title]));
+    root.append(el("div", { class: "viewhint", text: sub }));
+    const grid = el("div", { class: "grid" }); root.append(grid);
+    for (const p of list) {
+      if (!p.vault_key && !p.requires_key) grid.append(keylessCard(p));
+      else grid.append(providerKeyCard(p, editable));
+    }
+  };
+  renderGroup("Free & free-tier sources",
+    "No cost to use. Keyless sources work immediately; free-tier sources just need a free API key — tap “Get API key”.",
+    provs.filter(isFree));
+  renderGroup("Paid subscription sources",
+    "These require a paid subscription before their API key will return data. Pricing links are included.",
+    provs.filter(p => !isFree(p)));
+}
+
+// free | freemium | paid  ->  [badge text, tag css]
+function priceTag(pricing) {
+  const m = { free: ["free", "ok"], freemium: ["free tier", "ok"], paid: ["paid", "warn"] };
+  const [txt, cls] = m[pricing] || ["", ""];
+  return txt ? el("span", { class: "tag " + cls, text: txt }) : null;
 }
 
 function keylessCard(p) {
   return el("div", { class: "card" }, [
     el("div", { class: "ch" }, [el("span", { style: "display:flex;gap:8px;align-items:center" },
-      [el("b", { text: p.name }), el("span", { class: "tag ok", text: "keyless" })]),
+      [el("b", { text: p.name }), el("span", { class: "tag ok", text: "no key needed" })]),
       button("Test", { cls: "sm ghost", icon: "check", onclick: () => testProvider(p.name) })]),
-    el("div", { class: "cd", text: "accepts: " + p.input_types.join(", ") }),
+    el("div", { class: "cd", text: "works with: " + p.input_types.join(", ") }),
+    p.signup_url ? el("div", { class: "row", style: "margin-top:10px" }, [
+      el("a", { class: "btn sm ghost", href: p.signup_url, target: "_blank", rel: "noopener noreferrer" },
+        [icon("external", "sm"), el("span", { text: "Open site" })])]) : null,
   ]);
 }
 
@@ -523,20 +544,26 @@ function providerKeyCard(p, editable) {
   const inp = el("input", { type: "password", placeholder: p.needs_two_part ? "id:secret" : "API key", disabled: !editable ? "disabled" : null });
   const head = el("div", { class: "ch" }, [
     el("span", { style: "display:flex;gap:8px;align-items:center" }, [el("b", { text: p.name }),
-      el("span", { class: "tag " + (p.configured ? "ok" : "warn"), text: p.configured ? "set" : "needs key" })]),
+      el("span", { class: "tag " + (p.configured ? "ok" : "warn"), text: p.configured ? "ready" : "add key" }),
+      priceTag(p.pricing)]),
     el("span", { class: "tag", text: p.input_types.join(",") }),
   ]);
+  // Direct link to the API-key page; second link to sign up / see pricing.
+  const getKey = p.key_url ? el("a", { class: "btn sm ghost", href: p.key_url, target: "_blank", rel: "noopener noreferrer" },
+    [icon("key", "sm"), el("span", { text: "Get API key" })]) : null;
+  const signup = (p.signup_url && p.signup_url !== p.key_url)
+    ? el("a", { class: "btn sm ghost", href: p.signup_url, target: "_blank", rel: "noopener noreferrer" },
+        [icon("external", "sm"), el("span", { text: p.pricing === "paid" ? "See pricing" : "Sign up free" })]) : null;
   const actions = el("div", { class: "row", style: "margin-top:12px" }, [
     button("Save", { cls: "sm primary", onclick: async () => {
       if (!inp.value) return; try { await api.put("/api/vault/keys/" + p.vault_key, { value: inp.value });
         toast("Key saved"); inp.value = ""; rerender(); } catch (e) { toast(e.message, true); } } }),
     button("Test", { cls: "sm ghost", icon: "check", onclick: () => testProvider(p.name) }),
-    p.key_url ? el("a", { class: "btn sm ghost", href: p.key_url, target: "_blank", rel: "noopener noreferrer" },
-      [icon("external", "sm"), el("span", { text: "Get key" })]) : null,
-    p.configured ? button("", { cls: "sm danger", icon: "trash", label: "Delete key", onclick: async () => {
-      await api.del("/api/vault/keys/" + p.vault_key); toast("Deleted"); rerender(); } }) : null,
+    getKey, signup,
+    p.configured ? button("", { cls: "sm danger", icon: "trash", label: "Remove key", onclick: async () => {
+      await api.del("/api/vault/keys/" + p.vault_key); toast("Removed"); rerender(); } }) : null,
   ]);
-  return el("div", { class: "card" }, [head, field("Key", inp), actions]);
+  return el("div", { class: "card" }, [head, field("Paste key here", inp), actions]);
 }
 
 async function testProvider(name) {
@@ -595,7 +622,7 @@ function ringChart(pct, label) {
 /* ============================== Audit trail =========================== */
 async function auditView(root) {
   root.append(...pageHead("Audit trail",
-    "A tamper-evident, hash-chained record of every security-relevant action. Verify integrity at any time."));
+    "A tamper-proof record of everything important that happens in the app. It's locked so it can't be changed after the fact — check it any time."));
   const banner = el("div"); root.append(banner);
   const host = el("div"); root.append(host); host.append(skeleton(3));
   async function load() {
@@ -605,8 +632,8 @@ async function auditView(root) {
     banner.append(el("div", { class: "callout " + (v.ok ? "brand" : "bad"), style: "margin-bottom:16px" }, [
       icon(v.ok ? "shield" : "alert"),
       el("div", { style: "flex:1" }, [el("div", { html: v.ok
-        ? `<b>Integrity verified.</b> ${v.count} entries; the SHA-256 hash chain is intact.`
-        : `<b>Tampering detected</b> at entry #${v.broken_at}. The chain no longer verifies.` }),
+        ? `<b>All good.</b> ${v.count} entries logged, none altered.`
+        : `<b>Tampering detected</b> at entry #${v.broken_at}. The record no longer checks out.` }),
         el("div", { class: "mono small muted", style: "margin-top:4px", text: "tip: " + (v.tip || "").slice(0, 32) + "…" })]),
       button("Verify now", { cls: "sm", icon: "refresh", onclick: async () => {
         const r = await api.get("/api/audit/verify"); toast(r.ok ? "Chain verified ✓" : "Chain broken at #" + r.broken_at, !r.ok); } }),

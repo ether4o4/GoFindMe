@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 
 from . import __version__, audit_chain, db
 from .util import now_iso
@@ -19,6 +20,98 @@ from .util import now_iso
 
 def _esc(v) -> str:
     return html.escape("" if v is None else str(v))
+
+
+# Maps a leading subdomain label to the kind of service it usually fronts. Used to
+# infer, from naming alone, what a domain's infrastructure is used for. Honest and
+# clearly labelled as inferred — never presented as confirmed fact.
+_SERVICE_MAP = [
+    ("Email & messaging", {"mail", "smtp", "imap", "pop", "mx", "mx1", "mx2", "webmail",
+                            "exchange", "autodiscover", "email", "zimbra", "owa", "mta"}),
+    ("Web application", {"www", "web", "app", "apps", "home", "portal", "my"}),
+    ("API services", {"api", "apis", "gateway", "gql", "graphql", "rest", "ws"}),
+    ("Authentication & SSO", {"auth", "sso", "login", "idp", "oauth", "accounts", "account",
+                              "id", "identity", "adfs", "signin"}),
+    ("Content delivery & static assets", {"cdn", "static", "assets", "media", "img", "images",
+                                          "files", "content", "cache"}),
+    ("Remote access / VPN", {"vpn", "remote", "gw", "sslvpn", "access", "connect", "citrix", "rdp"}),
+    ("Administration", {"admin", "manage", "console", "dashboard", "cpanel", "whm", "panel", "control"}),
+    ("Developer & CI/CD", {"git", "gitlab", "jenkins", "ci", "cd", "build", "jira", "confluence",
+                           "nexus", "artifactory", "sonar", "registry", "docker", "harbor"}),
+    ("Non-production / staging", {"dev", "develop", "staging", "stg", "stage", "test", "testing",
+                                  "qa", "uat", "sandbox", "sbx", "demo", "preprod", "beta", "int"}),
+    ("Data & observability", {"db", "sql", "mysql", "postgres", "pg", "redis", "mongo", "elastic",
+                              "kibana", "grafana", "prometheus", "metrics", "logs", "splunk"}),
+    ("File transfer & storage", {"ftp", "sftp", "share", "nas", "drive", "storage", "s3", "backup"}),
+    ("Commerce & billing", {"shop", "store", "pay", "payment", "payments", "checkout", "billing",
+                            "invoice", "order", "orders", "cart"}),
+    ("Corporate / internal", {"corp", "internal", "intranet", "intra", "office", "hr", "erp",
+                              "crm", "sharepoint", "wiki"}),
+    ("Monitoring & status", {"status", "health", "monitor", "monitoring", "uptime", "stats"}),
+    ("Mail security / DNS", {"dns", "ns", "ns1", "ns2", "spf", "dkim", "dmarc", "_dmarc"}),
+]
+
+
+def _collect_related(findings: list[dict]) -> tuple[list[str], str]:
+    """Related hosts/subdomains aggregated across all provider findings, plus the
+    registrable base domain if any provider reported one."""
+    names: set[str] = set()
+    base = ""
+    for f in findings:
+        s = _loads(f.get("summary")) or {}
+        if isinstance(s, dict):
+            if s.get("base_domain") and not base:
+                base = str(s["base_domain"])
+            subs = s.get("subdomains")
+            if isinstance(subs, list):
+                for x in subs:
+                    if isinstance(x, str) and x.strip():
+                        names.add(x.strip().lower())
+    return sorted(names), base
+
+
+def _service_indicators(domains: list[str]) -> list[tuple[str, list[str]]]:
+    """Infer likely service categories from the leading labels of related hosts."""
+    labels: set[str] = set()
+    for d in domains:
+        parts = d.split(".")
+        for p in (parts[:-2] if len(parts) > 2 else []):
+            labels.add(p)
+            labels.add(re.sub(r"\d+$", "", p))  # api2 -> api
+    out = []
+    for cat, keys in _SERVICE_MAP:
+        matched = sorted(labels & keys)
+        if matched:
+            out.append((cat, matched[:6]))
+    return out
+
+
+def _auto_conclusion(case: dict, findings: list[dict], sources: list[str], hits: int,
+                     related: list[str], base: str,
+                     indicators: list[tuple[str, list[str]]], errored: list[str]) -> str:
+    """A narrative analyst conclusion built from real data (dynamic values escaped)."""
+    subj = case.get("subject") or case.get("title") or "the subject"
+    stype = case.get("subject_type") or "identifier"
+    src_list = ", ".join(sources) if sources else "no data sources"
+    s = [f"This investigation examined the {_esc(stype)} <b>{_esc(subj)}</b>. "
+         f"GoFindMe queried {len(sources)} source(s) ({_esc(src_list)}) and recorded "
+         f"{len(findings)} finding(s), including {hits} positive hit(s)."]
+    if related:
+        base_txt = f" for the registrable domain <b>{_esc(base)}</b>" if base else ""
+        s.append(f"Certificate-transparency and passive data{base_txt} surfaced "
+                 f"<b>{len(related)}</b> related host(s)/subdomain(s), enumerated below.")
+    if indicators:
+        cats = ", ".join(c for c, _ in indicators)
+        s.append(f"Subdomain naming indicates the domain is likely used for: <b>{_esc(cats)}</b> "
+                 f"(inferred from host names, not confirmed).")
+    if errored:
+        s.append(f"<b>Note:</b> {_esc(', '.join(errored))} did not return data on this run "
+                 f"&mdash; re-run the search if results look incomplete (crt.sh in particular is "
+                 f"often slow for large domains).")
+    if len(sources) <= 1:
+        s.append("Only keyless sources were used. Configure provider API keys in the Vault "
+                 "(breach, reputation and infrastructure data) to substantially enrich this profile.")
+    return " ".join(s)
 
 
 def _loads(v):
@@ -40,6 +133,9 @@ def _summary_cell(summary) -> str:
     for k, v in s.items():
         if k == "found":
             continue
+        if k == "error":
+            parts.append(f"<span class='err'>lookup error: {_esc(v)}</span>")
+            continue
         if isinstance(v, list):
             v = f"{len(v)} item(s): " + ", ".join(map(str, v[:6])) + ("…" if len(v) > 6 else "")
         parts.append(f"<b>{_esc(k)}</b>: {_esc(v)}")
@@ -48,7 +144,11 @@ def _summary_cell(summary) -> str:
 
 def _finding_result(summary) -> tuple[str, str]:
     s = _loads(summary) or {}
-    found = s.get("found") if isinstance(s, dict) else None
+    if not isinstance(s, dict):
+        return "info", "info"
+    if s.get("error"):
+        return "error", "error"
+    found = s.get("found")
     if found is True:
         return "HIT", "hit"
     if found is False:
@@ -74,6 +174,10 @@ def render_case_html(cid: int) -> str | None:
 
     sources = sorted({f["source_name"] for f in findings})
     hits = sum(1 for f in findings if (_loads(f["summary"]) or {}).get("found") is True)
+    errored = sorted({f["source_name"] for f in findings
+                      if (_loads(f["summary"]) or {}).get("error")})
+    related, base_domain = _collect_related(findings)
+    indicators = _service_indicators(related)
     generated = now_iso()
 
     # --- findings table rows ---
@@ -120,6 +224,36 @@ def render_case_html(cid: int) -> str | None:
 
     methodology = ", ".join(_esc(s) for s in sources) or "—"
 
+    # Executive summary: the examiner's own text if present, otherwise an
+    # auto-generated analyst conclusion (never a bland "nothing recorded").
+    if case.get("summary"):
+        exec_html = _esc(case["summary"])
+    else:
+        exec_html = _auto_conclusion(case, findings, sources, hits, related,
+                                     base_domain, indicators, errored)
+
+    # Related Domains & Infrastructure + inferred usage.
+    related_block = ""
+    if related:
+        shown = related[:300]
+        items = "".join(f"<li>{_esc(x)}</li>" for x in shown)
+        more = (f"<p class='dim'>… and {len(related) - len(shown)} more (see full JSON export).</p>"
+                if len(related) > len(shown) else "")
+        ind_block = ""
+        if indicators:
+            irows = "".join(
+                f"<tr><td>{_esc(cat)}</td><td class='dim'>{_esc(', '.join(ex))}</td></tr>"
+                for cat, ex in indicators)
+            ind_block = ("<h3 class='sub'>What it's likely used for &middot; guessed from the host names</h3>"
+                         "<table><thead><tr><th>Likely use</th><th>Matching hosts</th></tr></thead>"
+                         f"<tbody>{irows}</tbody></table>")
+        base_txt = f" under <b>{_esc(base_domain)}</b>" if base_domain else ""
+        related_block = (
+            f"<h2>Related Domains <span class='count'>{len(related)}</span></h2>"
+            f"<p class='prose'>Other sites and subdomains linked to the subject{base_txt}, "
+            f"pulled together from certificate transparency and passive data sources.</p>"
+            f"<ul class='domains'>{items}</ul>{more}{ind_block}")
+
     body = f"""
   <header class="rpt-head">
     <div class="mark">&#9678;</div>
@@ -137,28 +271,30 @@ def render_case_html(cid: int) -> str | None:
     <div><span class="k">Title</span><span class="v">{_esc(case.get('title'))}</span></div>
     <div><span class="k">Subject</span><span class="v">{_esc(case.get('subject') or '—')} <span class="dim">({_esc(case.get('subject_type') or 'n/a')})</span></span></div>
     <div><span class="k">Status</span><span class="v">{_esc((case.get('status') or '').upper())} &middot; priority {_esc(case.get('priority'))}</span></div>
-    <div><span class="k">Examiner</span><span class="v">{_esc(case.get('examiner') or '—')}</span></div>
-    <div><span class="k">Legal authority</span><span class="v">{_esc(case.get('authority') or '—')}</span></div>
+    <div><span class="k">Investigator</span><span class="v">{_esc(case.get('examiner') or '—')}</span></div>
+    <div><span class="k">Authorization</span><span class="v">{_esc(case.get('authority') or '—')}</span></div>
     <div><span class="k">Opened</span><span class="v">{_esc((case.get('created_at') or '').replace('T',' '))}</span></div>
-    <div><span class="k">Report generated</span><span class="v">{_esc(generated.replace('T',' '))} UTC</span></div>
-    <div><span class="k">Engine</span><span class="v">GoFindMe v{_esc(__version__)}</span></div>
+    <div><span class="k">Report made</span><span class="v">{_esc(generated.replace('T',' '))} UTC</span></div>
+    <div><span class="k">Made with</span><span class="v">GoFindMe v{_esc(__version__)}</span></div>
   </section>
 
   <section class="stats">
     <div class="stat"><div class="n">{len(findings)}</div><div class="l">Findings</div></div>
-    <div class="stat"><div class="n">{hits}</div><div class="l">Positive hits</div></div>
-    <div class="stat"><div class="n">{len(sources)}</div><div class="l">Sources queried</div></div>
+    <div class="stat"><div class="n">{hits}</div><div class="l">Hits</div></div>
+    <div class="stat"><div class="n">{len(sources)}</div><div class="l">Sources checked</div></div>
     <div class="stat"><div class="n">{len(timeline)}</div><div class="l">Timeline events</div></div>
   </section>
 
-  <h2>Executive Summary</h2>
-  <p class="prose">{_esc(case.get('summary')) or '<span class="dim">No executive summary was recorded for this investigation.</span>'}</p>
+  <h2>Summary</h2>
+  <p class="prose">{exec_html}</p>
 
   <h2>Findings <span class="count">{len(findings)}</span></h2>
   <table class="findings">
     <thead><tr><th>Source</th><th>Type</th><th>Target</th><th>Result</th><th>Detail</th><th>Recorded (UTC)</th></tr></thead>
     <tbody>{findings_tbl}</tbody>
   </table>
+
+  {related_block}
 
   {accounts_block}
 
@@ -167,26 +303,25 @@ def render_case_html(cid: int) -> str | None:
 
   {notes_block}
 
-  <h2>Methodology &amp; Sources</h2>
-  <p class="prose">This report was produced by GoFindMe, which dispatches an allowlisted set of
-  OSINT tools and queries configured data providers against the subject's identifiers. Tool inputs are
-  validated and executed without a shell; provider lookups are performed server-side. Sources engaged in
-  this investigation: <b>{methodology}</b>.</p>
+  <h2>How this was gathered</h2>
+  <p class="prose">GoFindMe ran a set of OSINT tools and data sources against the subject and
+  collected what they returned. Everything runs safely on the server — no data leaves your machine
+  except the lookups themselves. Sources used in this investigation: <b>{methodology}</b>.</p>
 
-  <h2>Chain of Custody &amp; Integrity</h2>
+  <h2>Integrity &amp; Activity Log</h2>
   <div class="coc {'ok' if integrity['ok'] else 'bad'}">
-    <div><span class="k">Audit trail</span><span class="v">{'INTACT — hash chain verified' if integrity['ok'] else 'BROKEN at entry #' + str(integrity['broken_at'])}</span></div>
-    <div><span class="k">Audit entries</span><span class="v">{integrity['count']}</span></div>
-    <div><span class="k">Audit tip hash</span><span class="v mono">{_esc(integrity['tip'])}</span></div>
+    <div><span class="k">Integrity check</span><span class="v">{'Passed — nothing was altered' if integrity['ok'] else 'FAILED at entry #' + str(integrity['broken_at'])}</span></div>
+    <div><span class="k">Log entries</span><span class="v">{integrity['count']}</span></div>
+    <div><span class="k">Verification hash</span><span class="v mono">{_esc(integrity['tip'])}</span></div>
   </div>
-  <table class="audit"><thead><tr><th>Time (UTC)</th><th>Actor</th><th>Category</th><th>Action</th><th>Hash</th></tr></thead>
+  <table class="audit"><thead><tr><th>Time (UTC)</th><th>Who</th><th>Area</th><th>Action</th><th>Hash</th></tr></thead>
   <tbody>{audit_rows_html}</tbody></table>
 
   <footer class="rpt-foot">
-    <div>GoFindMe Investigations Console &middot; Case {_esc(case.get('ref') or case['id'])} &middot; Generated {_esc(generated.replace('T',' '))} UTC</div>
-    <div class="dim">This document was generated from digital evidence held in the GoFindMe case datastore.
-    Integrity is attested by the tamper-evident audit chain above and the document fingerprint below.</div>
-    <div class="fp">Document fingerprint (SHA-256): <span class="mono" id="__fp__">%%FINGERPRINT%%</span></div>
+    <div>GoFindMe &middot; Case {_esc(case.get('ref') or case['id'])} &middot; Made {_esc(generated.replace('T',' '))} UTC</div>
+    <div class="dim">Built from the data saved in this GoFindMe case. The integrity check above and the
+    fingerprint below let anyone confirm this report hasn't been changed since it was made.</div>
+    <div class="fp">Report fingerprint (SHA-256): <span class="mono" id="__fp__">%%FINGERPRINT%%</span></div>
   </footer>
 """
 
@@ -230,6 +365,13 @@ _PAGE = """<!DOCTYPE html>
   .dim{color:var(--dim)}.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all}
   .pill{font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.4px}
   .pill.hit{background:#fef3f2;color:var(--bad)}.pill.clear{background:#ecfdf3;color:var(--ok)}.pill.info{background:#f2f4f7;color:var(--dim)}
+  .pill.error{background:#fff4ed;color:#b54708}
+  .err{color:var(--bad);font-weight:600}
+  h3.sub{font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:16px 0 6px}
+  ul.domains{columns:3;column-gap:24px;font-size:11.5px;margin:8px 0 4px;padding-left:16px;list-style:square}
+  ul.domains li{margin:2px 0;break-inside:avoid;word-break:break-all}
+  @media print{ul.domains{columns:2}}
+  @media(max-width:640px){ul.domains{columns:1}}
   ul.notes{font-size:13px;margin:6px 0;padding-left:20px}ul.notes li{margin:4px 0}
   .coc{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:8px 0}
   .coc.ok{border-left:4px solid var(--ok)}.coc.bad{border-left:4px solid var(--bad)}
