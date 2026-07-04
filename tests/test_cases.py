@@ -63,7 +63,7 @@ async def test_case_report_html_renders_and_is_scoped(_db):
     c = cases.create_case(subject="subject-x", subject_type="email", examiner="Analyst A")
     html = report.render_case_html(c["id"])
     assert html is not None
-    assert c["ref"] in html and "Chain of Custody" in html
+    assert c["ref"] in html and "Integrity" in html
     assert "Analyst A" in html
     # Fingerprint placeholder must be resolved to a real hash.
     assert "%%FINGERPRINT%%" not in html

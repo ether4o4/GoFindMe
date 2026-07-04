@@ -55,7 +55,13 @@ async def run_provider(provider: prov.Provider, target: str, ttype: str,
     status = "done" if res.ok else "error"
     short = res.error or ("found" if res.summary.get("found") else "no result")
     job_id = jobs.get_queue().record_provider_job(provider.name, target, ttype, status, short, parent)
-    _write_finding(job_id, "provider", provider.name, target, ttype, res.summary, res.raw, case_id)
+    # Persist the failure reason inside the finding so reports can explain a blank
+    # result ("crt.sh timed out") instead of silently showing nothing.
+    finding_summary = dict(res.summary or {})
+    if not res.ok:
+        finding_summary.setdefault("found", False)
+        finding_summary["error"] = res.error or "lookup_failed"
+    _write_finding(job_id, "provider", provider.name, target, ttype, finding_summary, res.raw, case_id)
     audit("info", "provider", "lookup", provider=provider.name, target_type=ttype, ok=res.ok)
     d = res.to_dict()
     d["job_id"] = job_id

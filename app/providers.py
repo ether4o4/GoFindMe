@@ -33,6 +33,29 @@ class ProviderResult:
         return asdict(self)
 
 
+# Minimal set of multi-label public suffixes so we can derive a registrable
+# domain without shipping the full Public Suffix List. Good enough to turn a deep
+# host (a.b.example.co.uk) into its org domain (example.co.uk).
+_MULTI_SUFFIX = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "co.jp", "co.nz", "co.za",
+    "com.au", "net.au", "org.au", "com.br", "com.mx", "co.in", "co.kr", "com.cn",
+    "com.tr", "com.sg", "com.hk", "com.tw", "co.il", "com.ua",
+}
+
+
+def registrable_domain(host: str) -> str | None:
+    """Best-effort eTLD+1: a.b.tubi.io -> tubi.io ; x.example.co.uk -> example.co.uk."""
+    host = (host or "").strip().strip(".").lower()
+    if not host or "." not in host:
+        return None
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    if ".".join(labels[-2:]) in _MULTI_SUFFIX:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
 def make_client() -> httpx.AsyncClient:
     s = settings()
     verify: Any = s.ca_bundle if s.ca_bundle else True
@@ -61,6 +84,7 @@ class Provider:
     vault_key: str | None = None
     input_types: list[str] = []
     needs_two_part: bool = False  # key stored as "a:b"
+    pricing: str = "freemium"     # free | freemium | paid  (for the UI free/paid split)
 
     async def test(self, client: httpx.AsyncClient, key: str | None) -> ProviderResult:
         raise NotImplementedError
@@ -98,18 +122,23 @@ class CrtSh(Provider):
         return await self.lookup(client, key, "example.com", "domain")
 
     async def lookup(self, client, key, target, ttype):
-        url = f"https://crt.sh/?q=%25.{target}&output=json"
-        r, data, err = await self._json(client, "GET", url)
+        # Query the registrable domain, not the exact host — that's where the
+        # related subdomains/infrastructure actually live (a.b.tubi.io -> tubi.io).
+        base = registrable_domain(target) or target
+        url = f"https://crt.sh/?q=%25.{base}&output=json"
+        r, data, err = await self._json(client, "GET", url, timeout=35.0)
         if err:
             return self.fail(target, err, r.status_code if r else None)
-        subs = sorted({
-            name.strip().lstrip("*.")
-            for row in (data or [])
-            for name in str(row.get("name_value", "")).splitlines()
-            if name.strip()
-        })
+        names = set()
+        for row in (data or []):
+            for name in str(row.get("name_value", "")).splitlines():
+                n = name.strip().lstrip("*.").lower()
+                if n and "@" not in n and " " not in n:
+                    names.add(n)
+        subs = sorted(names)
         return self.ok(target, {"found": bool(subs), "count": len(subs),
-                                "subdomains": subs[:50]}, (data or [])[:200])
+                                "base_domain": base, "subdomains": subs[:200]},
+                       (data or [])[:200])
 
 
 class Shodan(Provider):
@@ -465,6 +494,7 @@ _PROVIDERS: dict[str, Provider] = {
 
 
 # Direct links to where each provider's API key is obtained.
+# Direct deep-links to each provider's API-KEY page (not the marketing homepage).
 KEY_URLS = {
     "shodan": "https://account.shodan.io",
     "censys": "https://search.censys.io/account/api",
@@ -476,9 +506,39 @@ KEY_URLS = {
     "securitytrails": "https://securitytrails.com/app/account/credentials",
     "ipinfo": "https://ipinfo.io/account/token",
     "emailrep": "https://emailrep.io/key",
-    "leakcheck": "https://leakcheck.io/api",
+    "leakcheck": "https://leakcheck.io/dashboard",
     "intelx": "https://intelx.io/account?tab=developer",
     "dehashed": "https://dehashed.com/profile",
+}
+
+# Where to sign up / read pricing for a source (shown alongside the key link).
+SIGNUP_URLS = {
+    "crtsh": "https://crt.sh/",
+    "shodan": "https://account.shodan.io/register",
+    "censys": "https://accounts.censys.io/register",
+    "virustotal": "https://www.virustotal.com/gui/join-us",
+    "hibp": "https://haveibeenpwned.com/API/Key",
+    "hunter": "https://hunter.io/users/sign_up",
+    "greynoise": "https://viz.greynoise.io/signup",
+    "abuseipdb": "https://www.abuseipdb.com/register",
+    "securitytrails": "https://securitytrails.com/app/signup",
+    "ipinfo": "https://ipinfo.io/signup",
+    "emailrep": "https://emailrep.io/key",
+    "leakcheck": "https://leakcheck.io/pricing",
+    "intelx": "https://intelx.io/product",
+    "dehashed": "https://dehashed.com/register",
+}
+
+# Pricing tier per source so the UI can separate FREE from PAID API pages:
+#   free     = usable with no payment (often no key at all)
+#   freemium = free key / free tier available, paid plans for more volume
+#   paid     = an API key requires a paid subscription
+PRICING = {
+    "crtsh": "free", "greynoise": "free", "emailrep": "freemium",
+    "shodan": "freemium", "censys": "freemium", "virustotal": "freemium",
+    "hunter": "freemium", "abuseipdb": "freemium", "securitytrails": "freemium",
+    "ipinfo": "freemium", "intelx": "freemium",
+    "hibp": "paid", "leakcheck": "paid", "dehashed": "paid",
 }
 
 
@@ -497,6 +557,8 @@ def list_providers(configured: set[str]) -> list[dict]:
             "needs_two_part": p.needs_two_part,
             "configured": (not p.requires_key) or (p.vault_key in configured),
             "key_url": KEY_URLS.get(p.name, ""),
+            "signup_url": SIGNUP_URLS.get(p.name, ""),
+            "pricing": PRICING.get(p.name, "freemium"),
         })
     return out
 
