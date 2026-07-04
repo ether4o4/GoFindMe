@@ -102,7 +102,11 @@ function caseCard(c) {
         el("div", { class: "mono small", style: "color:var(--brand)", text: c.ref || ("#" + c.id) }),
         el("div", { style: "font-weight:680;font-size:15px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap", text: c.title }),
       ]),
-      el("span", { class: "pri " + (c.priority || "normal"), text: c.priority || "normal" }),
+      el("div", { class: "row", style: "gap:6px;align-items:center" }, [
+        el("span", { class: "pri " + (c.priority || "normal"), text: c.priority || "normal" }),
+        button("", { cls: "sm ghost", icon: "trash", label: "Delete investigation",
+          onclick: (e) => { e.stopPropagation(); delCase(c, true); } }),
+      ]),
     ]),
     el("div", { class: "cd", text: (c.subject_type ? c.subject_type + " · " : "") + (c.subject || "—") }),
     el("div", { class: "row", style: "margin-top:13px;gap:16px" }, [
@@ -207,10 +211,13 @@ function caseHeader(c) {
   ]);
 }
 
-async function delCase(c) {
-  if (!confirmAction("Delete case " + (c.ref || c.id) + "? Evidence is unlinked, not destroyed.")) return;
-  try { await api.del("/api/cases/" + c.id); toast("Case deleted"); location.hash = "#/cases"; }
-  catch (e) { toast(e.message, true); }
+async function delCase(c, fromList) {
+  if (!confirmAction("Delete investigation " + (c.ref || c.id) + "?\n\nIts findings, notes, timeline and report data will be permanently removed. This can't be undone.")) return;
+  try {
+    await api.del("/api/cases/" + c.id);
+    toast("Investigation deleted");
+    if (fromList) rerender(); else location.hash = "#/cases";
+  } catch (e) { toast(e.message, true); }
 }
 
 async function caseOverview(root, c) {
@@ -275,10 +282,18 @@ async function caseFindings(root, c) {
     }
     rounds++;
     stableRounds = added ? 0 : stableRounds + 1;
-    if (!grid.children.length && rounds > 1)
-      grid.append(emptyState("search", "No findings yet",
-        "Providers need API keys to return data — add them under Sources. Keyless sources (crt.sh) work immediately."));
-    if (stableRounds >= 4 || rounds > 40) { clearInterval(timer); status.remove(); }
+    // Keep polling while any job is still running (tools like Sherlock can take a
+    // couple of minutes) — only settle once nothing is running and it's gone quiet.
+    let running = 0;
+    try { running = (await api.get("/api/jobs?status=running")).length; } catch {}
+    if (running) {
+      stableRounds = 0;
+      status.lastChild.innerHTML = `Collecting results… ${running} source(s) still running. New findings appear below automatically.`;
+    }
+    if (!grid.children.length && rounds > 1 && !running)
+      grid.append(emptyState("search", "No results yet",
+        "Tools (Sherlock, Maigret…) show their hits here once they finish, and providers return data once you add their API keys under Sources. Keyless sources like crt.sh work right away."));
+    if ((!running && stableRounds >= 3) || rounds > 150) { clearInterval(timer); status.remove(); }
   }
   const timer = setInterval(tick, 2000); onDispose(() => clearInterval(timer));
   await tick();
@@ -828,6 +843,24 @@ async function settingsView(root) {
   root.append(el("div", { class: "grid" }, [
     docCard("Security whitepaper", "Architecture, crypto, controls, and NIST 800-53 alignment.", "docs/SECURITY.md"),
     docCard("Deployment guide", "On-prem, VPS, air-gapped, and desktop deployment.", "docs/DEPLOYMENT.md"),
+  ]));
+
+  // Danger zone — bulk cleanup.
+  root.append(el("div", { class: "h-sec" }, [icon("alert"), "Danger zone"]));
+  root.append(el("div", { class: "card", style: "border-color:rgba(226,85,78,.4)" }, [
+    el("div", { class: "cd", text: "These permanently delete data and can't be undone." }),
+    el("div", { class: "row", style: "margin-top:12px" }, [
+      button("Delete ALL investigations", { cls: "sm danger", icon: "trash", onclick: async () => {
+        if (!confirmAction("Delete EVERY investigation and all its findings, notes, timeline and report data?\n\nThis cannot be undone.")) return;
+        try { const r = await api.del("/api/cases"); toast(`Deleted ${r.deleted} investigation(s)`); }
+        catch (e) { toast(e.message, true); }
+      } }),
+      button("Remove ALL API keys", { cls: "sm danger", icon: "trash", onclick: async () => {
+        if (!confirmAction("Remove every saved provider API key from the vault?\n\nYou'll need to re-enter them to use paid sources again.")) return;
+        try { const r = await api.del("/api/vault/keys"); toast(`Removed ${r.deleted} key(s)`); }
+        catch (e) { toast(e.message, true); }
+      } }),
+    ]),
   ]));
 }
 function kv(k, v) { return el("div", { class: "row", style: "justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)" },

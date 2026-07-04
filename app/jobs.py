@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from . import db, tools
 from .config import settings
-from .util import audit, now_iso
+from .util import audit, jdumps, now_iso
 
 _SENTINEL = object()
 _HEAVY = {"amass": 1, "bbot": 1, "maigret": 2}
@@ -55,19 +55,20 @@ class JobQueue:
                 pass
 
     # --- enqueue ---
-    def _insert(self, kind: str, name: str, target: str, ttype: str, parent: str | None) -> str:
+    def _insert(self, kind: str, name: str, target: str, ttype: str, parent: str | None,
+                case_id: int | None = None) -> str:
         jid = uuid.uuid4().hex
         db.execute(
-            "INSERT INTO jobs (id, parent_id, kind, name, target, target_type, status, created_at) "
-            "VALUES (?,?,?,?,?,?, 'queued', ?)",
-            (jid, parent, kind, name, target, ttype, now_iso()),
+            "INSERT INTO jobs (id, parent_id, kind, name, target, target_type, status, "
+            "created_at, case_id) VALUES (?,?,?,?,?,?, 'queued', ?, ?)",
+            (jid, parent, kind, name, target, ttype, now_iso(), case_id),
         )
         self._runtime[jid] = _Runtime()
         return jid
 
     def enqueue_tool(self, spec: tools.ToolSpec, target: str, ttype: str,
-                     parent: str | None = None) -> str:
-        jid = self._insert("tool", spec.name, target, ttype, parent)
+                     parent: str | None = None, case_id: int | None = None) -> str:
+        jid = self._insert("tool", spec.name, target, ttype, parent, case_id)
         self._q.put_nowait(jid)
         return jid
 
@@ -143,10 +144,12 @@ class JobQueue:
         if rt.cancelled:
             await self._finish(jid, "cancelled", None, "cancelled before start")
             return
-        row = await db.aquery_one("SELECT kind, name, target FROM jobs WHERE id=?", (jid,))
+        row = await db.aquery_one(
+            "SELECT kind, name, target, target_type, case_id FROM jobs WHERE id=?", (jid,))
         if not row:
             return
         kind, name, target = row["kind"], row["name"], row["target"]
+        ttype, case_id = row["target_type"], row["case_id"]
         spec = tools.get_spec(name)
         if not spec:
             await self._finish(jid, "error", None, "unknown tool")
@@ -209,6 +212,21 @@ class JobQueue:
             await self._finish(jid, "cancelled", None, "cancelled")
             return
         await self._finish(jid, status, rc, None, out)
+        # Turn a completed tool run into a case finding so its results show up in
+        # the case, report and graph — not just the raw job log.
+        if kind == "tool" and status == "done" and case_id:
+            try:
+                summary = tools.parse_tool_findings(spec, out)
+                if summary:
+                    await db.aexecute(
+                        "INSERT INTO findings (job_id, source_kind, source_name, target, "
+                        "target_type, summary, raw, case_id, created_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (jid, "tool", name, target, ttype, jdumps(summary), None,
+                         case_id, now_iso()),
+                    )
+            except Exception:  # pragma: no cover - defensive; never fail the job
+                pass
 
     async def _spawn(self, jid, rt, argv, timeout, stdin, env):
         async def on_output(text: str) -> None:

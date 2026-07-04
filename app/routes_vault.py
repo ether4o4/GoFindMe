@@ -47,6 +47,11 @@ async def set_key(provider: str, body: KeyValue, _t: str = security.Auth) -> dic
     return {"ok": True, "provider": provider}
 
 
+@router.delete("/keys")
+async def delete_all_keys(_t: str = security.Auth) -> dict:
+    return {"ok": True, "deleted": vault.delete_all_keys()}
+
+
 @router.delete("/keys/{provider}")
 async def delete_key(provider: str, _t: str = security.Auth) -> dict:
     vault.delete_key(provider)

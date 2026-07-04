@@ -59,6 +59,28 @@ async def test_audit_chain_detects_tampering(_db):
     assert v["ok"] is False and v["broken_at"] == row["id"]
 
 
+async def test_delete_case_purges_findings(_db):
+    from app.util import now_iso, jdumps
+    c = cases.create_case(subject="x.com", subject_type="domain")
+    cid = c["id"]
+    db.execute("INSERT INTO findings (job_id, source_kind, source_name, target, target_type, "
+               "summary, raw, case_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+               (None, "tool", "sherlock", "x.com", "domain", jdumps({"found": True}), None,
+                cid, now_iso()))
+    assert cases.get_case(cid)["counts"]["findings"] == 1
+    assert cases.delete_case(cid) == 1
+    assert cases.get_case(cid) is None
+    # findings for that case are purged, not orphaned
+    assert db.query_one("SELECT COUNT(*) c FROM findings WHERE case_id=?", (cid,))["c"] == 0
+
+
+async def test_delete_all_cases(_db):
+    cases.create_case(subject="a.com", subject_type="domain")
+    cases.create_case(subject="b.com", subject_type="domain")
+    assert cases.delete_all_cases() == 2
+    assert cases.list_cases() == []
+
+
 async def test_case_report_html_renders_and_is_scoped(_db):
     c = cases.create_case(subject="subject-x", subject_type="email", examiner="Analyst A")
     html = report.render_case_html(c["id"])

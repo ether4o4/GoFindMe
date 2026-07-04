@@ -129,6 +129,11 @@ class VaultState:
         db.execute("DELETE FROM vault_secrets WHERE provider=?", (provider,))
         audit("audit", "vault", "key deleted", provider=provider)
 
+    def delete_all_keys(self) -> int:
+        n = db.write("DELETE FROM vault_secrets", ())
+        audit("audit", "vault", "all keys deleted", count=n)
+        return n
+
     def get_key(self, provider: str) -> str | None:
         row = db.query_one("SELECT blob, mode FROM vault_secrets WHERE provider=?", (provider,))
         if row is None:
