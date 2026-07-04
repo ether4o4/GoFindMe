@@ -36,6 +36,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("accounts", "case_id", "INTEGER"),
     ("identity_items", "case_id", "INTEGER"),
     ("graph_nodes", "case_id", "INTEGER"),
+    ("jobs", "case_id", "INTEGER"),  # so a tool run can be turned into a case finding
 ]
 
 

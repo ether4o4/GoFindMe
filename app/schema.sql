@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   error       TEXT,
   created_at  TEXT NOT NULL,
   started_at  TEXT,
-  finished_at TEXT
+  finished_at TEXT,
+  case_id     INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS findings (

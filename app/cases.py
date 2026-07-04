@@ -88,9 +88,21 @@ def update_case(cid: int, **fields) -> dict | None:
     return get_case(cid)
 
 
+# Evidence that IS the investigation's results — deleted with the case.
+_PURGE_TABLES = ("findings", "notes", "timeline_events", "graph_nodes", "jobs")
+# Manually-curated records — kept, just unlinked from the deleted case.
+_UNLINK_TABLES = ("accounts", "identity_items")
+
+
 def delete_case(cid: int) -> int:
-    # Unlink scoped evidence rather than destroy it, then remove the case shell.
-    for t in _SCOPED_TABLES:
+    """Delete a case and the results gathered under it (findings, notes, timeline,
+    graph, jobs). Manually-entered accounts/identity items are kept but unlinked."""
+    for t in _PURGE_TABLES:
+        try:
+            db.write(f"DELETE FROM {t} WHERE case_id=?", (cid,))
+        except Exception:
+            pass
+    for t in _UNLINK_TABLES:
         try:
             db.write(f"UPDATE {t} SET case_id=NULL WHERE case_id=?", (cid,))
         except Exception:
@@ -99,6 +111,15 @@ def delete_case(cid: int) -> int:
     if n:
         audit("audit", "case", "case deleted", case_id=cid)
     return n
+
+
+def delete_all_cases() -> int:
+    """Delete every case and all investigation results. Returns cases removed."""
+    ids = [r["id"] for r in db.query("SELECT id FROM cases")]
+    for cid in ids:
+        delete_case(cid)
+    audit("audit", "case", "all cases deleted", count=len(ids))
+    return len(ids)
 
 
 def touch(cid: int) -> None:

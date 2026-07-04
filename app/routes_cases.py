@@ -55,6 +55,11 @@ async def update_case(cid: int, body: CaseBody, _t: str = security.Auth) -> dict
     return c
 
 
+@router.delete("")
+async def delete_all_cases(_t: str = security.Auth) -> dict:
+    return {"ok": True, "deleted": cases.delete_all_cases()}
+
+
 @router.delete("/{cid}")
 async def delete_case(cid: int, _t: str = security.Auth) -> dict:
     if not cases.delete_case(cid):

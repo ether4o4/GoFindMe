@@ -480,6 +480,50 @@ def _valid_for(target: str, ttype: str) -> bool:
         return False
 
 
+_URL_RE = re.compile(r'https?://[^\s"\'<>()\]]+')
+_HOST_RE = re.compile(r'^(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.I)
+
+
+def parse_tool_findings(spec: ToolSpec, output: str | None) -> dict | None:
+    """Turn a tool's stdout into a compact finding summary so tool results surface
+    in the case, report and graph — not just the raw job log. Returns None when
+    there is nothing worth recording.
+
+    - username tools (sherlock/maigret/blackbird/nexfil): found profile URLs
+    - domain tools (subfinder/amass/assetfinder/...): hostnames, one per line
+      (keyed as ``subdomains`` so the report's Related Domains picks them up too)
+    - otherwise: any URLs found
+    """
+    text = strip_ansi(output or "")
+    if not text.strip():
+        return None
+
+    urls, seen = [], set()
+    for m in _URL_RE.finditer(text):
+        u = m.group(0).rstrip('.,);]\'"')
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    if "username" in spec.accepts and urls:
+        return {"found": True, "count": len(urls), "profiles": urls[:200]}
+
+    if "domain" in spec.accepts:
+        hosts, hseen = [], set()
+        for line in text.splitlines():
+            h = line.strip().lower().lstrip("*.")
+            h = h.split()[0] if h else h
+            if h and h not in hseen and _HOST_RE.match(h):
+                hseen.add(h)
+                hosts.append(h)
+        if hosts:
+            return {"found": True, "count": len(hosts), "subdomains": hosts[:300]}
+
+    if urls:
+        return {"found": True, "count": len(urls), "results": urls[:200]}
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Tool manager — install / update / version, via an allowlist of managers
 # ---------------------------------------------------------------------------

@@ -87,6 +87,30 @@ def test_git_tool_not_installed_before_clone():
         tools.build_tool_argv(spec, "someuser")
 
 
+def test_parse_tool_findings_username_profiles():
+    spec = tools.get_spec("sherlock")
+    out = ("[+] Instagram: https://instagram.com/jdoe\n"
+           "[+] GitHub: https://github.com/jdoe\n"
+           "[-] Twitter: Not Found")
+    s = tools.parse_tool_findings(spec, out)
+    assert s and s["found"] is True and s["count"] == 2
+    assert "https://github.com/jdoe" in s["profiles"]
+
+
+def test_parse_tool_findings_domain_hosts():
+    spec = tools.get_spec("subfinder")
+    out = "api.example.com\nmail.example.com\nnot a host line here\ncdn.example.com\n"
+    s = tools.parse_tool_findings(spec, out)
+    assert s and s["count"] == 3
+    # keyed as subdomains so the report's Related Domains picks them up
+    assert "api.example.com" in s["subdomains"]
+
+
+def test_parse_tool_findings_empty_returns_none():
+    assert tools.parse_tool_findings(tools.get_spec("sherlock"), "") is None
+    assert tools.parse_tool_findings(tools.get_spec("sherlock"), "   \n  ") is None
+
+
 def test_git_tool_detected_and_run_after_clone(tmp_path_factory):
     import os
     spec = _git_spec("clonedtool", "clonedtool.py")

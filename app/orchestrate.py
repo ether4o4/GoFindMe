@@ -95,7 +95,8 @@ def search_all(target: str, ttype: str | None, case_id: int | None = None) -> di
         if tools.resolve_bin(spec.bin) is None:
             skipped.append(spec.name)
             continue
-        tool_jobs.append({"name": spec.name, "job_id": q.enqueue_tool(spec, target, ttype, parent)})
+        tool_jobs.append({"name": spec.name,
+                          "job_id": q.enqueue_tool(spec, target, ttype, parent, case_id)})
 
     # Providers: configured or keyless for this type.
     configured = set(vault.configured_providers())
