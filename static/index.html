@@ -5,43 +5,517 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
 <title>GoFindMe · OSINT Console</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Archivo+Black&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-<div id="neversoft-splash" aria-hidden="true">
-  <div class="ns-inner">
-    <div class="ns-badge">N</div>
-    <div class="ns-word">NeverSoft Services</div>
-    <div class="ns-bar"><span></span></div>
-  </div>
-</div>
+<!-- NeverSoft Services boot splash — retro CRT terminal. Shows once at launch,
+     fades out after boot, and hands off to the app. Never blocks the app. -->
+<div id="neversoft-splash" role="status" aria-live="polite">
 <style>
-#neversoft-splash{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;
-  background:linear-gradient(180deg,#121216,#0b0b0d);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  opacity:1;transition:opacity .45s ease}
-#neversoft-splash.ns-hide{opacity:0}
-#neversoft-splash .ns-inner{display:flex;flex-direction:column;align-items:center;gap:14px}
-#neversoft-splash .ns-badge{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;
-  font-weight:800;font-size:30px;color:#0b0b0d;
-  background:linear-gradient(135deg,#5ed1a0,#4f86f7)}
-#neversoft-splash .ns-word{font-size:18px;font-weight:740;letter-spacing:-.3px;color:#f2f2f5}
-#neversoft-splash .ns-bar{width:132px;height:3px;border-radius:3px;background:#2a2a33;overflow:hidden}
-#neversoft-splash .ns-bar span{display:block;height:100%;width:40%;border-radius:3px;
-  background:linear-gradient(90deg,#5ed1a0,#4f86f7);animation:ns-slide 1s ease-in-out infinite}
-@keyframes ns-slide{0%{transform:translateX(-120%)}100%{transform:translateX(360%)}}
-@media(prefers-reduced-motion:reduce){#neversoft-splash .ns-bar span{animation:none}}
+/* @section: design-system
+   NeverSoft Services boot splash — retro CRT terminal.
+   Palette: red + black main, white + gold accents. */
+#neversoft-splash {
+  color-scheme: dark;
+  --black: #050506;
+  --panel: #0a0708;
+  --red: #ff1f2e;
+  --red-deep: #b3121c;
+  --red-glow: rgba(255, 31, 46, 0.55);
+  --white: #f6f2ec;
+  --gold: #e8c268;
+  --gold-glow: rgba(232, 194, 104, 0.5);
+  --muted: #7a5a5c;
+  --mono: "Share Tech Mono", ui-monospace, "Courier New", monospace;
+  --display: "Archivo Black", "Oswald", system-ui, sans-serif;
+  --cond: "Oswald", system-ui, sans-serif;
+}
+
+#neversoft-splash *,
+#neversoft-splash *::before,
+#neversoft-splash *::after {
+  box-sizing: border-box;
+}
+
+#neversoft-splash p {
+  margin: 0;
+}
+
+/* ---------- viewport / scanlines / flicker ---------- */
+#neversoft-splash .scanlines {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: clamp(0.75rem, 3vw, 2.5rem);
+}
+
+#neversoft-splash .scanlines::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.28) 3px,
+    rgba(0, 0, 0, 0.28) 4px
+  );
+  mix-blend-mode: multiply;
+}
+
+#neversoft-splash .scanlines::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 31;
+  background: radial-gradient(120% 120% at 50% 50%, transparent 62%, rgba(0, 0, 0, 0.75) 100%);
+}
+
+#neversoft-splash .crt-flicker {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  pointer-events: none;
+  background: rgba(255, 31, 46, 0.02);
+  animation: ns-flicker 4.5s infinite steps(60);
+}
+
+@keyframes ns-flicker {
+  0%, 96%, 100% { opacity: 0.5; }
+  97% { opacity: 0.15; }
+  98% { opacity: 0.85; }
+  99% { opacity: 0.35; }
+}
+
+/* ---------- terminal frame ---------- */
+#neversoft-splash .terminal {
+  position: relative;
+  width: min(680px, 100%);
+  aspect-ratio: 1 / 1;
+  max-height: calc(100vh - 2rem);
+  padding: clamp(1.1rem, 3.4vw, 2.4rem);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(160deg, #0b0708 0%, #060404 100%);
+  border: 2px solid var(--red);
+  box-shadow:
+    0 0 18px var(--red-glow),
+    inset 0 0 40px rgba(255, 31, 46, 0.06);
+  z-index: 10;
+}
+
+/* inner thin frame */
+#neversoft-splash .terminal::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px solid rgba(255, 31, 46, 0.35);
+  pointer-events: none;
+}
+
+/* corner brackets */
+#neversoft-splash .bracket {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--gold);
+  z-index: 12;
+  filter: drop-shadow(0 0 4px var(--gold-glow));
+}
+#neversoft-splash .bracket.tl { top: -3px; left: -3px; border-right: none; border-bottom: none; }
+#neversoft-splash .bracket.tr { top: -3px; right: -3px; border-left: none; border-bottom: none; }
+#neversoft-splash .bracket.bl { bottom: -3px; left: -3px; border-right: none; border-top: none; }
+#neversoft-splash .bracket.br { bottom: -3px; right: -3px; border-left: none; border-top: none; }
+
+/* ---------- header ---------- */
+#neversoft-splash .term-head {
+  display: flex;
+  gap: clamp(0.6rem, 2vw, 1.1rem);
+  align-items: flex-start;
+}
+
+#neversoft-splash .glyph-box {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 2px solid var(--red);
+  color: var(--red);
+  box-shadow: 0 0 8px var(--red-glow);
+}
+#neversoft-splash .glyph-phone { font-size: clamp(1.1rem, 3vw, 1.5rem); line-height: 1; text-shadow: 0 0 6px var(--red-glow); }
+#neversoft-splash .glyph-kanji { font-size: 0.62rem; letter-spacing: 0.12em; color: var(--gold); }
+
+#neversoft-splash .head-lines { display: grid; gap: 2px; }
+#neversoft-splash .head-line {
+  font-size: clamp(0.62rem, 1.9vw, 0.9rem);
+  letter-spacing: 0.06em;
+  color: var(--red);
+  text-shadow: 0 0 5px var(--red-glow);
+}
+#neversoft-splash .head-line:first-child { color: var(--gold); text-shadow: 0 0 5px var(--gold-glow); }
+
+/* ---------- thank-you / initializing line ---------- */
+#neversoft-splash .thankyou { margin-top: clamp(0.7rem, 2.6vw, 1.6rem); }
+#neversoft-splash .ty-text {
+  font-family: var(--cond);
+  font-weight: 700;
+  font-size: clamp(0.85rem, 2.6vw, 1.35rem);
+  letter-spacing: 0.14em;
+  color: var(--white);
+  text-transform: uppercase;
+}
+#neversoft-splash .ty-rule {
+  margin-top: 6px;
+  height: 0;
+  border-top: 2px dashed var(--red);
+  filter: drop-shadow(0 0 3px var(--red-glow));
+}
+
+/* ---------- wordmark ---------- */
+#neversoft-splash .wordmark {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+#neversoft-splash .brand {
+  position: relative;
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: clamp(2.6rem, 12vw, 6.4rem);
+  line-height: 0.9;
+  letter-spacing: 0.01em;
+  color: var(--white);
+  text-transform: none;
+  white-space: nowrap;
+  text-shadow: 0 0 22px rgba(246, 242, 236, 0.28);
+  animation: ns-chroma 3.6s infinite steps(30);
+}
+
+/* chromatic aberration via layered pseudo-copies */
+#neversoft-splash .brand::before,
+#neversoft-splash .brand::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  pointer-events: none;
+}
+#neversoft-splash .brand::before { color: var(--red); transform: translate(-3px, 1px); mix-blend-mode: screen; opacity: 0.85; }
+#neversoft-splash .brand::after { color: var(--gold); transform: translate(3px, -1px); mix-blend-mode: screen; opacity: 0.55; }
+
+@keyframes ns-chroma {
+  0%, 100% { transform: translate(0, 0); }
+  8% { transform: translate(-1px, 0); }
+  9% { transform: translate(1px, 0); }
+  50% { transform: translate(0, 0); }
+  52% { transform: translate(0.5px, -0.5px); }
+}
+
+#neversoft-splash .brand-sub {
+  margin-top: clamp(0.3rem, 1.4vw, 0.7rem);
+  font-family: var(--cond);
+  font-weight: 600;
+  font-size: clamp(1rem, 5vw, 2.3rem);
+  letter-spacing: clamp(0.4rem, 3vw, 1.1rem);
+  padding-left: clamp(0.4rem, 3vw, 1.1rem); /* balance the tracking */
+  color: var(--gold);
+  text-transform: uppercase;
+  text-shadow: 0 0 10px var(--gold-glow);
+}
+
+/* ---------- mid status ---------- */
+#neversoft-splash .mid-status {
+  text-align: center;
+  margin: clamp(0.5rem, 2vw, 1.1rem) 0;
+}
+#neversoft-splash .mid-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: clamp(0.68rem, 2vw, 1rem);
+  letter-spacing: 0.06em;
+  color: var(--white);
+}
+#neversoft-splash .mid-chip {
+  display: inline-block;
+  width: clamp(34px, 9vw, 58px);
+  height: 0.85em;
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red-glow);
+  animation: ns-chipblink 1s steps(2) infinite;
+}
+@keyframes ns-chipblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
+#neversoft-splash .mid-sub {
+  margin-top: 4px;
+  font-size: clamp(0.6rem, 1.8vw, 0.85rem);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* ---------- footer / loader ---------- */
+#neversoft-splash .term-foot {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: end;
+  gap: clamp(0.5rem, 2vw, 1rem);
+  margin-top: auto;
+  padding-top: clamp(0.5rem, 2vw, 1rem);
+}
+
+#neversoft-splash .est {
+  font-size: clamp(0.6rem, 1.8vw, 0.85rem);
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  text-shadow: 0 0 5px var(--gold-glow);
+}
+
+#neversoft-splash .foot-center { min-width: 0; }
+#neversoft-splash .loading-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+  font-size: clamp(0.7rem, 2vw, 1rem);
+  letter-spacing: 0.1em;
+  color: var(--white);
+  margin-bottom: 6px;
+}
+#neversoft-splash .loading-line .pct {
+  margin-left: 8px;
+  color: var(--gold);
+  text-shadow: 0 0 6px var(--gold-glow);
+}
+#neversoft-splash .dots span { animation: ns-dotpulse 1.2s infinite; }
+#neversoft-splash .dots span:nth-child(2) { animation-delay: 0.2s; }
+#neversoft-splash .dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ns-dotpulse { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+
+#neversoft-splash .bar-track {
+  position: relative;
+  height: clamp(14px, 3.4vw, 20px);
+  border: 2px solid var(--red);
+  background: rgba(255, 31, 46, 0.06);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+#neversoft-splash .bar-fill {
+  height: 100%;
+  width: 0%;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--red) 0px,
+    var(--red) 10px,
+    var(--red-deep) 10px,
+    var(--red-deep) 14px
+  );
+  box-shadow: 0 0 12px var(--red-glow);
+  transition: width 0.18s linear;
+}
+#neversoft-splash .bar-fill::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--gold);
+  box-shadow: 0 0 8px var(--gold-glow);
+}
+
+#neversoft-splash .logo-box {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 2px 5px;
+  padding: 4px 7px;
+  border: 2px solid var(--gold);
+  color: var(--gold);
+  box-shadow: 0 0 8px var(--gold-glow);
+}
+#neversoft-splash .lb-phone { font-size: clamp(0.85rem, 2.4vw, 1.15rem); grid-row: span 2; color: var(--red); text-shadow: 0 0 5px var(--red-glow); }
+#neversoft-splash .lb-tag { font-size: 0.62rem; letter-spacing: 0.1em; }
+#neversoft-splash .lb-mark { font-size: 0.62rem; color: var(--white); }
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  #neversoft-splash .crt-flicker,
+  #neversoft-splash .brand,
+  #neversoft-splash .mid-chip,
+  #neversoft-splash .dots span { animation: none; }
+}
+
+/* ---------- small screens ---------- */
+@media (max-width: 480px) {
+  #neversoft-splash .terminal { aspect-ratio: auto; min-height: calc(100vh - 1.5rem); }
+  #neversoft-splash .term-head { gap: 0.5rem; }
+}
+
+#neversoft-splash{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:radial-gradient(120% 120% at 50% 40%,#14090a 0%,#070405 55%,#030203 100%);}
 </style>
-<script>
-(function(){
-  var s=document.getElementById('neversoft-splash');
-  if(!s)return;
-  setTimeout(function(){
-    s.classList.add('ns-hide');
-    setTimeout(function(){if(s&&s.parentNode)s.parentNode.removeChild(s);},500);
-  },850);
+<main class="scanlines" aria-label="NeverSoft Services loading screen">
+<div class="crt-flicker" aria-hidden="true"></div>
+<section class="terminal" role="status" aria-live="polite">
+<span class="bracket tl" aria-hidden="true"></span>
+<span class="bracket tr" aria-hidden="true"></span>
+<span class="bracket bl" aria-hidden="true"></span>
+<span class="bracket br" aria-hidden="true"></span>
+<header class="term-head">
+<div class="glyph-box" aria-hidden="true">
+<span class="glyph-phone">&#9742;</span>
+<span class="glyph-kanji">通信</span>
+</div>
+<div class="head-lines">
+<p class="head-line">SELECT MODULE:</p>
+<p class="head-line">[CORE], SYNC, VAULT</p>
+<p class="head-line">BUILD:11.0 &nbsp; REGION:US</p>
+</div>
+</header>
+<div class="thankyou">
+<p class="ty-text">INITIALIZING SERVICES</p>
+<div class="ty-rule" aria-hidden="true"></div>
+</div>
+<div class="wordmark">
+<h1 class="brand" data-text="NeverSoft">NeverSoft</h1>
+<p class="brand-sub">SERVICES</p>
+</div>
+<div class="mid-status">
+<p class="mid-line">
+<span class="mid-label" id="module-label">MOUNTING&nbsp;CORE&nbsp;MODULES</span>
+<span class="mid-chip" id="mid-chip" aria-hidden="true"></span>
+</p>
+<p class="mid-sub" id="module-sub">(SECURE SESSION // AUTHORIZED)</p>
+</div>
+<footer class="term-foot">
+<div class="foot-left">
+<p class="est">est.2011</p>
+</div>
+<div class="foot-center">
+<p class="loading-line">
+<span id="loading-text">LOADING</span><span class="dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+<span class="pct" id="pct">0%</span>
+</p>
+<div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar-track">
+<div class="bar-fill" id="bar-fill"></div>
+</div>
+</div>
+<div class="foot-right">
+<div class="logo-box" aria-hidden="true">
+<span class="lb-phone">&#9742;</span>
+<span class="lb-tag">NS</span>
+<span class="lb-mark">11</span>
+</div>
+</div>
+</footer>
+</section>
+</main>
+<script>// @section: page-interactions
+// NeverSoft Services boot loader — drives a real progress bar 0 -> 100%.
+document.documentElement.classList.add("js-ready");
+
+(function () {
+  "use strict";
+
+  var barFill = document.getElementById("bar-fill");
+  var barTrack = document.getElementById("bar-track");
+  var pctEl = document.getElementById("pct");
+  var loadingText = document.getElementById("loading-text");
+  var moduleLabel = document.getElementById("module-label");
+  var moduleSub = document.getElementById("module-sub");
+
+  if (!barFill || !pctEl) { return; }
+
+  // Boot sequence — each stage references NeverSoft Services / apps loading.
+  var STAGES = [
+    { at: 0,   label: "MOUNTING CORE MODULES",   sub: "(NeverSoft Core Services)" },
+    { at: 14,  label: "LOADING CROSS TRACE",      sub: "(data cross-reference engine)" },
+    { at: 30,  label: "LOADING GO FIND ME",   sub: "(OSINT toolkit online)" },
+    { at: 46,  label: "LOADING SPOTLIGHT",             sub: "(all-device search index)" },
+    { at: 62,  label: "LOADING COLOUR CEAUXDID",   sub: "(LLM agent container)" },
+    { at: 78,  label: "SYNCING APP STORE",         sub: "(NeverSoft App Store)" },
+    { at: 90,  label: "VERIFYING SESSION",             sub: "(secure // authorized)" },
+    { at: 100, label: "SERVICES READY",                sub: "(welcome to NeverSoft)" }
+  ];
+
+  var progress = 0;
+  var target = 100;
+  var lastLabel = "";
+
+  function currentStage(p) {
+    var stage = STAGES[0];
+    for (var i = 0; i < STAGES.length; i++) {
+      if (p >= STAGES[i].at) { stage = STAGES[i]; }
+    }
+    return stage;
+  }
+
+  function render(p) {
+    var clamped = Math.max(0, Math.min(100, Math.round(p)));
+    barFill.style.width = clamped + "%";
+    pctEl.textContent = clamped + "%";
+    if (barTrack) { barTrack.setAttribute("aria-valuenow", String(clamped)); }
+
+    var stage = currentStage(clamped);
+    if (stage.label !== lastLabel) {
+      lastLabel = stage.label;
+      if (moduleLabel) { moduleLabel.innerHTML = stage.label; }
+      if (moduleSub) { moduleSub.innerHTML = stage.sub; }
+    }
+  }
+
+  function finish() {
+    if (loadingText) { loadingText.textContent = "READY"; }
+    render(100);
+    // Gentle completion pulse on the frame.
+    var term = document.querySelector("#neversoft-splash .terminal");
+
+    var root = document.getElementById("neversoft-splash");
+    if (root) { setTimeout(function(){ root.style.transition="opacity .45s ease"; root.style.opacity="0";
+      setTimeout(function(){ if(root&&root.parentNode){root.parentNode.removeChild(root);} if(typeof window.__neverSoftSplashDone==="function"){window.__neverSoftSplashDone();} },480); },320); }
+    if (term) {
+      term.style.transition = "box-shadow 0.5s ease";
+      term.style.boxShadow = "0 0 32px rgba(232,194,104,0.55), inset 0 0 44px rgba(255,31,46,0.08)";
+    }
+  }
+
+  function tick() {
+    if (progress >= target) { finish(); return; }
+    // Uneven, believable boot cadence: mostly steady with occasional stalls.
+    var step = Math.random() * 2.4 + 0.5;
+    // Brief stalls near stage boundaries feel like real module loads.
+    if (Math.random() < 0.08) { step = 0.1; }
+    progress = Math.min(target, progress + step);
+    render(progress);
+    var delay = 22 + Math.random() * 42;
+    setTimeout(tick, delay);
+  }
+
+  render(0);
+  setTimeout(tick, 260);
+
+  // Safety net: never let the splash trap the app.
+  setTimeout(function () {
+    var root = document.getElementById("neversoft-splash");
+    if (root && root.parentNode) {
+      root.parentNode.removeChild(root);
+      if (typeof window.__neverSoftSplashDone === "function") { window.__neverSoftSplashDone(); }
+    }
+  }, 8000);
 })();
 </script>
+</div>
 <div id="app"></div>
 <noscript>GoFindMe needs JavaScript enabled.</noscript>
 <script type="module" src="/static/js/app.js"></script>
