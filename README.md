@@ -179,8 +179,14 @@ waybackurls, katana, hakrawler, waymore, bbot, whois, shodan-cli, exiftool, mat2
 **Manual / GUI frameworks** (listed for visibility + copy-command, never auto-executed): spiderfoot,
 recon-ng, maltego, osmedeus, foca, moriarty.
 
-**API providers:** crt.sh (keyless), emailrep (keyless), shodan, censys, virustotal, hibp, hunter,
-greynoise, abuseipdb, securitytrails, ipinfo, leakcheck, intelx, dehashed.
+**API providers:** crt.sh (keyless), emailrep (keyless), greynoise (keyless), leakcheck (keyless
+public tier — breach exposure for email/username/phone with no key), shodan, censys, virustotal,
+hibp, hunter, abuseipdb, securitytrails, ipinfo, intelx, dehashed.
+
+**Keyless web pivots (no API key, works on the phone app):** `pivots` runs for **every** target
+type and returns direct "open in browser" links with zero setup — including, for a real name,
+where to look yourself up plus data-broker **opt-out** pages so you can find and remove your own
+exposure. It builds links only and makes no outbound request itself.
 
 ---
 

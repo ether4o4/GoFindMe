@@ -307,3 +307,13 @@ details>.body{padding:13px 14px}
 }
 @media(min-width:861px){.mobmenu-btn{display:none}}
 .hidden{display:none}
+
+/* ===== finding cards: lead note + keyless pivot links ===== */
+.card .cd .finding-note{color:var(--text);margin:1px 0 9px;font-size:12.5px;line-height:1.5}
+.card .cd .kv{margin:8px 0}
+.card .cd .kvk{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--faint);margin-bottom:5px}
+.card .cd .links{display:flex;flex-wrap:wrap;gap:6px}
+.linkchip{display:inline-block;max-width:100%;font-size:11.5px;color:var(--brand);text-decoration:none;
+  border:1px solid var(--border2);background:var(--surface2);border-radius:8px;padding:4px 9px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.linkchip:hover{border-color:var(--brand);background:var(--surface3)}
