@@ -292,17 +292,40 @@ async function caseFindings(root, c) {
     }
     if (!grid.children.length && rounds > 1 && !running)
       grid.append(emptyState("search", "No results yet",
-        "Tools (Sherlock, Maigret…) show their hits here once they finish, and providers return data once you add their API keys under Sources. Keyless sources like crt.sh work right away."));
+        "Keyless sources — crt.sh, LeakCheck breach search, GreyNoise, and the no-key web links — return results right away with no setup. Installed CLI tools (Sherlock, Maigret…) and key-based providers add more once configured under Sources."));
     if ((!running && stableRounds >= 3) || rounds > 150) { clearInterval(timer); status.remove(); }
   }
   const timer = setInterval(tick, 2000); onDispose(() => clearInterval(timer));
   await tick();
 }
 
+function isUrl(x) { return typeof x === "string" && /^https?:\/\//i.test(x); }
+// Render a summary value as readable text — objects (e.g. LeakCheck breach
+// sources) become a name/label rather than "[object Object]".
+function fmtItem(x) {
+  if (x && typeof x === "object")
+    return x.name || x.source || x.title || x.label || JSON.stringify(x);
+  return String(x);
+}
+function fmtVal(v) {
+  if (Array.isArray(v))
+    return v.slice(0, 8).map(fmtItem).join(", ") + (v.length > 8 ? ` … (+${v.length - 8} more)` : "");
+  return fmtItem(v);
+}
+function linkChip(u) {
+  const t = u.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  return el("a", { class: "linkchip", href: u, target: "_blank", rel: "noopener noreferrer",
+    text: t.length > 46 ? t.slice(0, 45) + "…" : t });
+}
 function findingCard(f) {
   const s = f.summary || {};
   const found = s.found;
-  const badge = found === true ? ["tag bad", "HIT"] : found === false ? ["tag ok", "CLEAR"] : ["tag", "INFO"];
+  // An errored lookup (e.g. rate-limited) must not read as a green "CLEAR" —
+  // show it as an error so a blank result is never mistaken for "no exposure".
+  const badge = s.error ? ["tag warn", "ERROR"]
+    : found === true ? ["tag bad", "HIT"]
+    : found === false ? ["tag ok", "CLEAR"]
+    : ["tag", "INFO"];
   const head = el("div", { class: "ch" }, [
     el("span", { style: "display:flex;align-items:center;gap:8px" },
       [el("b", { text: f.source_name }), el("span", { class: "tag", text: f.target_type })]),
@@ -311,7 +334,23 @@ function findingCard(f) {
   const body = el("div", { class: "cd" });
   for (const [k, v] of Object.entries(s)) {
     if (k === "found") continue;
-    body.append(el("div", { text: `${k}: ${Array.isArray(v) ? v.slice(0, 8).join(", ") : v}` }));
+    // A lead note (e.g. the keyless-pivots guidance) reads as prose, not "note: …".
+    if ((k === "note" || k === "guidance") && typeof v === "string") {
+      body.append(el("div", { class: "finding-note", text: v })); continue;
+    }
+    // URL values (keyless pivots, profile hits) render as clickable chips.
+    if (Array.isArray(v) && v.length && v.every(isUrl)) {
+      body.append(el("div", { class: "kv" }, [
+        el("div", { class: "kvk", text: k.replace(/_/g, " ") }),
+        el("div", { class: "links" }, v.slice(0, 16).map(linkChip))]));
+      continue;
+    }
+    if (isUrl(v)) {
+      body.append(el("div", { class: "kv" }, [
+        el("div", { class: "kvk", text: k.replace(/_/g, " ") }), linkChip(v)]));
+      continue;
+    }
+    body.append(el("div", { text: `${k}: ${fmtVal(v)}` }));
   }
   const card = el("div", { class: "card" }, [head, body]);
   if (f.raw)

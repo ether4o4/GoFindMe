@@ -391,7 +391,12 @@ class EmailRep(Provider):
 
 
 class LeakCheck(Provider):
-    name, vault_key, input_types = "leakcheck", "leakcheck", ["email", "username", "phone"]
+    # Keyless by default: LeakCheck's public endpoint (/api/public) returns breach
+    # exposure with no API key, so a fresh user — and the phone app, which can't run
+    # CLI tools — gets real results with zero setup. An optional vault key upgrades
+    # to the richer authenticated v2 API (see lookup()).
+    name, requires_key, vault_key, input_types = \
+        "leakcheck", False, "leakcheck", ["email", "username", "phone"]
 
     async def test(self, client, key):
         r, data, err = await self._json(
@@ -485,10 +490,132 @@ class DeHashed(Provider):
                        entries[:50])
 
 
+# --------------------------------------------------------------------------
+# Keyless "web pivots": direct links that work with NO API key — the user just
+# opens them. Ported and expanded from the legacy launcher so the server app has
+# the same zero-setup value. `{q}` is replaced with the URL-encoded target.
+#   group "find"   -> where to look yourself up (people-search / search engines)
+#   group "remove" -> data-broker / people-search opt-out (removal) pages
+#   group "open"   -> a keyless site to open for this identifier
+# Opt-out URLs are entry points that change over time — always verify the current
+# removal process on each site.
+PIVOTS: dict[str, list[tuple[str, str, str]]] = {
+    "realname": [
+        ("Google", "https://www.google.com/search?q=%22{q}%22", "find"),
+        ("Bing", "https://www.bing.com/search?q=%22{q}%22", "find"),
+        ("LinkedIn", "https://www.linkedin.com/search/results/all/?keywords={q}", "find"),
+        ("ThatsThem", "https://thatsthem.com/name/{q}", "find"),
+        ("Facebook", "https://www.facebook.com/search/people/?q={q}", "find"),
+        ("Spokeo opt-out", "https://www.spokeo.com/optout", "remove"),
+        ("Whitepages opt-out", "https://www.whitepages.com/suppression-requests", "remove"),
+        ("BeenVerified opt-out", "https://www.beenverified.com/app/optout/search", "remove"),
+        ("Radaris opt-out", "https://radaris.com/control/privacy", "remove"),
+        ("Intelius opt-out", "https://www.intelius.com/opt-out/", "remove"),
+        ("MyLife opt-out", "https://www.mylife.com/ccpa/index.pubview", "remove"),
+        ("TruePeopleSearch removal", "https://www.truepeoplesearch.com/removal", "remove"),
+        ("FastPeopleSearch removal", "https://www.fastpeoplesearch.com/removal", "remove"),
+        ("PeopleFinders opt-out", "https://www.peoplefinders.com/opt-out", "remove"),
+        ("Google — Results about you", "https://myactivity.google.com/results-about-you", "remove"),
+    ],
+    "username": [
+        ("WhatsMyName", "https://whatsmyname.app/?q={q}", "open"),
+        ("GitHub", "https://github.com/{q}", "open"),
+        ("Reddit", "https://www.reddit.com/user/{q}", "open"),
+        ("X / Twitter", "https://x.com/{q}", "open"),
+        ("Instagram", "https://www.instagram.com/{q}/", "open"),
+        ("Google", "https://www.google.com/search?q=%22{q}%22", "open"),
+    ],
+    "email": [
+        ("Have I Been Pwned", "https://haveibeenpwned.com/", "open"),
+        ("EmailRep", "https://emailrep.io/{q}", "open"),
+        ("Google", "https://www.google.com/search?q=%22{q}%22", "open"),
+    ],
+    "phone": [
+        ("Truecaller", "https://www.truecaller.com/search/us/{q}", "open"),
+        ("Google", "https://www.google.com/search?q=%22{q}%22", "open"),
+    ],
+    "domain": [
+        ("crt.sh", "https://crt.sh/?q={q}", "open"),
+        ("urlscan.io", "https://urlscan.io/domain/{q}", "open"),
+        ("AlienVault OTX", "https://otx.alienvault.com/indicator/domain/{q}", "open"),
+        ("Wayback Machine", "https://web.archive.org/web/*/{q}", "open"),
+        ("DNSDumpster", "https://dnsdumpster.com/", "open"),
+    ],
+    "ip": [
+        ("GreyNoise", "https://viz.greynoise.io/ip/{q}", "open"),
+        ("AbuseIPDB", "https://www.abuseipdb.com/check/{q}", "open"),
+        ("AlienVault OTX", "https://otx.alienvault.com/indicator/ip/{q}", "open"),
+        ("ipinfo.io", "https://ipinfo.io/{q}", "open"),
+    ],
+    "hash": [
+        ("MalwareBazaar", "https://bazaar.abuse.ch/browse.php?search=sha256%3A{q}", "open"),
+        ("Hybrid Analysis", "https://www.hybrid-analysis.com/search?query={q}", "open"),
+        ("AlienVault OTX", "https://otx.alienvault.com/indicator/file/{q}", "open"),
+    ],
+    "bitcoin": [
+        ("Blockchain.com", "https://www.blockchain.com/explorer/addresses/btc/{q}", "open"),
+        ("Blockchair", "https://blockchair.com/bitcoin/address/{q}", "open"),
+        ("BlockCypher", "https://live.blockcypher.com/btc/address/{q}/", "open"),
+        ("WalletExplorer", "https://www.walletexplorer.com/address/{q}", "open"),
+    ],
+    "image": [
+        ("Google Lens", "https://lens.google.com/", "open"),
+        ("Yandex Images", "https://yandex.com/images/", "open"),
+        ("TinEye", "https://tineye.com/", "open"),
+        ("PimEyes", "https://pimeyes.com/en", "open"),
+    ],
+}
+
+
+class Pivots(Provider):
+    """Keyless 'web pivots' — direct, no-API-key links the user simply opens.
+
+    For a real name this is the *only* zero-setup source, so it turns the previously
+    dead 'realname' search into an actionable result (where to look yourself up +
+    data-broker opt-out pages). For every other identifier it adds keyless places to
+    look alongside the API providers. It builds URLs only — it makes no outbound
+    request of its own, so it works offline and on the phone app.
+    """
+    name, requires_key, vault_key = "pivots", False, None
+    input_types = list(PIVOTS.keys())
+    pricing = "free"
+
+    def _links(self, target: str, ttype: str) -> list[dict]:
+        from urllib.parse import quote
+        q = quote(target, safe="")
+        rows = PIVOTS.get(ttype) or [("Google", "https://www.google.com/search?q=%22{q}%22", "open")]
+        return [{"label": lbl, "url": tmpl.replace("{q}", q), "group": grp}
+                for lbl, tmpl, grp in rows]
+
+    async def test(self, client, key):
+        return self.ok("pivots", {"types": len(PIVOTS)}, None)
+
+    async def lookup(self, client, key, target, ttype):
+        links = self._links(target, ttype)
+        by: dict[str, list[str]] = {}
+        for l in links:
+            by.setdefault(l["group"], []).append(l["url"])
+        if ttype == "realname":
+            note = ("No API key needed. Use the 'check yourself' links to see where you show up, "
+                    "then open each opt-out page to remove your listing. Re-check every few months "
+                    "— data brokers re-add you over time.")
+        else:
+            note = "No API key needed — open these to check this target directly."
+        summary: dict = {"note": note}
+        if by.get("find"):
+            summary["check_yourself"] = by["find"]
+        if by.get("remove"):
+            summary["opt_out_pages"] = by["remove"]
+        if by.get("open"):
+            summary["open_no_key"] = by["open"]
+        return self.ok(target, summary, links)
+
+
 _PROVIDERS: dict[str, Provider] = {
     p.name: p for p in [
         CrtSh(), Shodan(), Censys(), VirusTotal(), HIBP(), Hunter(), GreyNoise(),
         AbuseIPDB(), SecurityTrails(), IPInfo(), EmailRep(), LeakCheck(), IntelX(), DeHashed(),
+        Pivots(),
     ]
 }
 
@@ -538,7 +665,10 @@ PRICING = {
     "shodan": "freemium", "censys": "freemium", "virustotal": "freemium",
     "hunter": "freemium", "abuseipdb": "freemium", "securitytrails": "freemium",
     "ipinfo": "freemium", "intelx": "freemium",
-    "hibp": "paid", "leakcheck": "paid", "dehashed": "paid",
+    # leakcheck has a free keyless public tier; a paid key unlocks more.
+    "leakcheck": "freemium",
+    "pivots": "free",
+    "hibp": "paid", "dehashed": "paid",
 }
 
 
