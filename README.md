@@ -1,5 +1,14 @@
 # GoFindMe — Investigations Console
 
+## Download the Android app
+
+[![Latest APK](https://img.shields.io/github/v/release/ether4o4/GoFindMe?include_prereleases&label=Download%20APK&logo=android&color=3DDC84)](https://github.com/ether4o4/GoFindMe/releases/download/android-latest/gofindme-debug.apk)
+
+**[⬇ Download the latest GoFindMe APK](https://github.com/ether4o4/GoFindMe/releases/download/android-latest/gofindme-debug.apk)**
+
+The `android-latest` tag is republished by CI on every build, so this link always serves the newest
+APK. On the device, enable *Install unknown apps* for your browser, then open the downloaded file.
+
 A **self-hosted OSINT / DFIR investigations platform**. An investigator enters a target, and
 GoFindMe opens a **case**, runs every available recon tool and data provider against it
 (server-side, no browser-CORS wall), auto-builds a **relationship graph**, and organizes everything
