@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -35,16 +36,7 @@ import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Native Android shell for the bundled GoFindMe FastAPI server.
- *
- * The Android build is intentionally self-contained: Chaquopy runs the Python
- * server locally, while this activity provides a resilient WebView shell with
- * a real startup watchdog, offline/error state, downloads, external intents,
- * back navigation and lifecycle cleanup.
- */
 public class MainActivity extends Activity {
-
     private static final String URL = "http://127.0.0.1:8000/";
     private static final String HEALTH = URL + "api/health";
     private static final long STARTUP_TIMEOUT_MS = 60000L;
@@ -62,13 +54,11 @@ public class MainActivity extends Activity {
     private boolean serverReady;
     private boolean destroyed;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setStatusBarColor(Color.rgb(8, 11, 16));
         getWindow().setNavigationBarColor(Color.rgb(8, 11, 16));
-
         buildShell();
         startPythonServer();
     }
@@ -76,7 +66,6 @@ public class MainActivity extends Activity {
     private void buildShell() {
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(8, 11, 16));
-
         web = new WebView(this);
         configureWebView();
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
@@ -130,7 +119,6 @@ public class MainActivity extends Activity {
         retryButton.setVisibility(View.GONE);
         retryButton.setOnClickListener(v -> startPythonServer());
         loadingPanel.addView(retryButton, new LinearLayout.LayoutParams(-2, dp(48)));
-
         root.addView(loadingPanel, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
     }
@@ -147,26 +135,21 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        s.setSafeBrowsingEnabled(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) s.setSafeBrowsingEnabled(true);
         s.setUserAgentString(s.getUserAgentString() + " GoFindMeAndroid/2.0");
 
         CookieManager.getInstance().setAcceptCookie(true);
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return handleUrl(request.getUrl().toString());
             }
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return handleUrl(url);
             }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame() && serverReady) {
-                    Toast.makeText(MainActivity.this, "GoFindMe is temporarily unavailable. Pull to retry.", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "GoFindMe is temporarily unavailable. Retry from the page.", Toast.LENGTH_SHORT).show();
                 }
             }
         });
@@ -193,14 +176,9 @@ public class MainActivity extends Activity {
     private boolean handleUrl(String raw) {
         Uri uri = Uri.parse(raw);
         String scheme = uri.getScheme();
-        if (scheme == null || "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
-            return false;
-        }
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, uri));
-        } catch (Exception e) {
-            Toast.makeText(this, "No app can open that link", Toast.LENGTH_SHORT).show();
-        }
+        if (scheme == null || "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) return false;
+        try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); }
+        catch (Exception e) { Toast.makeText(this, "No app can open that link", Toast.LENGTH_SHORT).show(); }
         return true;
     }
 
@@ -212,12 +190,8 @@ public class MainActivity extends Activity {
         statusText.setText("Starting local engine…");
         loadingPanel.setVisibility(View.VISIBLE);
         startupStartedAt = System.currentTimeMillis();
-
-        if (!Python.isStarted()) {
-            Python.start(new AndroidPlatform(this));
-        }
-        Python.getInstance().getModule("android_main")
-                .callAttr("start", getFilesDir().getAbsolutePath());
+        if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
+        Python.getInstance().getModule("android_main").callAttr("start", getFilesDir().getAbsolutePath());
         probeServer();
     }
 
@@ -232,7 +206,6 @@ public class MainActivity extends Activity {
                 ok = conn.getResponseCode() == 200;
                 conn.disconnect();
             } catch (Exception ignored) { }
-
             final boolean ready = ok;
             handler.post(() -> {
                 if (destroyed) return;
@@ -241,10 +214,7 @@ public class MainActivity extends Activity {
                     spinner.setVisibility(View.GONE);
                     statusText.setText("Ready");
                     handler.postDelayed(() -> {
-                        if (!destroyed) {
-                            loadingPanel.setVisibility(View.GONE);
-                            web.loadUrl(URL);
-                        }
+                        if (!destroyed) { loadingPanel.setVisibility(View.GONE); web.loadUrl(URL); }
                     }, 120);
                 } else if (System.currentTimeMillis() - startupStartedAt < STARTUP_TIMEOUT_MS) {
                     statusText.setText("Preparing local engine…");
@@ -258,42 +228,17 @@ public class MainActivity extends Activity {
         });
     }
 
-    @Override
-    public void onBackPressed() {
-        if (web != null && web.canGoBack()) {
-            web.goBack();
-        } else {
-            super.onBackPressed();
-        }
+    @Override public void onBackPressed() {
+        if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
     }
-
-    @Override
-    protected void onPause() {
-        if (web != null) web.onPause();
-        super.onPause();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (web != null) web.onResume();
-    }
-
-    @Override
-    protected void onDestroy() {
+    @Override protected void onPause() { if (web != null) web.onPause(); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
+    @Override protected void onDestroy() {
         destroyed = true;
         handler.removeCallbacksAndMessages(null);
         probeExecutor.shutdownNow();
-        if (web != null) {
-            web.stopLoading();
-            web.loadUrl("about:blank");
-            web.destroy();
-            web = null;
-        }
+        if (web != null) { web.stopLoading(); web.loadUrl("about:blank"); web.destroy(); web = null; }
         super.onDestroy();
     }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }
