@@ -1,0 +1,57 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+# Dead-simple Termux entry point:
+#   gofindme username
+#   gofindme email@example.com
+#   gofindme +15551234567
+#   gofindme example.com
+#
+# The server stays local. The browser receives the target through a URL query
+# parameter, so no shell interpolation is ever used for the target.
+
+ROOT="${GOFINDME_HOME:-$HOME/GoFindMe}"
+PORT="${GOFINDME_PORT:-8000}"
+TARGET="${*:-}"
+
+if [[ -z "$TARGET" ]]; then
+  echo "Usage: gofindme <username|email|phone|name|domain|IP|hash>"
+  exit 2
+fi
+
+if [[ ! -f "$ROOT/app/main.py" ]]; then
+  echo "GoFindMe is not installed at $ROOT."
+  echo "Run: bash $ROOT/scripts/gofindme-termux.sh"
+  exit 1
+fi
+
+cd "$ROOT"
+URL="http://127.0.0.1:${PORT}/"
+
+if ! curl -fsS "${URL}api/health" >/dev/null 2>&1; then
+  if pgrep -f "uvicorn app.main:app" >/dev/null 2>&1; then
+    :
+  else
+    nohup python -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" --log-level warning \
+      >"$ROOT/gofindme-termux.log" 2>&1 &
+  fi
+fi
+
+for _ in $(seq 1 80); do
+  if curl -fsS "${URL}api/health" >/dev/null 2>&1; then break; fi
+  sleep 0.25
+done
+
+if ! curl -fsS "${URL}api/health" >/dev/null 2>&1; then
+  echo "GoFindMe did not become ready. See $ROOT/gofindme-termux.log"
+  exit 1
+fi
+
+TARGET_ENCODED="$(python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$TARGET")"
+FINAL_URL="${URL}?target=${TARGET_ENCODED}#/investigate"
+
+if command -v termux-open-url >/dev/null 2>&1; then
+  termux-open-url "$FINAL_URL"
+else
+  echo "Open: $FINAL_URL"
+fi
