@@ -53,14 +53,34 @@ public class MainActivity extends Activity {
     private long startupStartedAt;
     private boolean serverReady;
     private boolean destroyed;
+    private String pendingTarget;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setStatusBarColor(Color.rgb(8, 11, 16));
         getWindow().setNavigationBarColor(Color.rgb(8, 11, 16));
+        pendingTarget = extractSharedText(getIntent());
         buildShell();
         startPythonServer();
+    }
+
+    private String extractSharedText(Intent intent) {
+        if (intent == null) return null;
+        String action = intent.getAction();
+        if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_PROCESS_TEXT.equals(action)) {
+            String text = intent.getStringExtra(Intent.EXTRA_TEXT);
+            if (text != null) {
+                text = text.trim();
+                if (text.length() > 0 && text.length() <= 4096) return text;
+            }
+        }
+        return null;
+    }
+
+    private String launchUrl() {
+        if (pendingTarget == null || pendingTarget.isEmpty()) return URL;
+        return Uri.parse(URL).buildUpon().appendQueryParameter("target", pendingTarget).build().toString();
     }
 
     private void buildShell() {
@@ -214,7 +234,7 @@ public class MainActivity extends Activity {
                     spinner.setVisibility(View.GONE);
                     statusText.setText("Ready");
                     handler.postDelayed(() -> {
-                        if (!destroyed) { loadingPanel.setVisibility(View.GONE); web.loadUrl(URL); }
+                        if (!destroyed) { loadingPanel.setVisibility(View.GONE); web.loadUrl(launchUrl()); }
                     }, 120);
                 } else if (System.currentTimeMillis() - startupStartedAt < STARTUP_TIMEOUT_MS) {
                     statusText.setText("Preparing local engine…");
