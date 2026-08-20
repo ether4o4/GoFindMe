@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="gfm_bg">#080B10</color>
+    <color name="gfm_surface">#10151D</color>
+    <color name="gfm_accent">#2DD4A7</color>
+    <color name="gfm_text">#FFFFFF</color>
+</resources>
