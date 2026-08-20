@@ -15,7 +15,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to publish the Release
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -35,9 +35,8 @@ jobs:
         run: |
           mkdir -p android/app/src/main/python
           cp -r app static legacy android/app/src/main/python/
-          echo "Staged:" && ls android/app/src/main/python
+          echo "Staged:" && find android/app/src/main/python -maxdepth 2 -type f | sort | head -80
 
-      # The runner's preinstalled Gradle (9.x) is too new for AGP 8.2.x, so pin 8.7.
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -49,26 +48,31 @@ jobs:
           CHAQUOPY_PYTHON: ${{ steps.py.outputs.python-path }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Upload APK artifact (per-run, expires)
+      - name: Verify APK integrity and manifest
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" | grep -E "package: name=|launchable-activity:"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gofindme-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: gofindme-android-2.0.0-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Stage APK with a friendly name
         run: cp android/app/build/outputs/apk/debug/app-debug.apk gofindme-debug.apk
 
-      # Permanent download: a rolling "android-latest" release whose asset URL is
-      # stable and never expires. Re-uploaded on every successful build.
       - name: Publish APK to rolling Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: GoFindMe Android (latest debug build)
+          name: GoFindMe Android (latest)
           prerelease: true
           body: |
-            Self-contained GoFindMe Android app (debug-signed).
-            Built from commit ${{ github.sha }}.
-            Download `gofindme-debug.apk` below.
+            GoFindMe Android 2.0.0 debug build.
+            Built from commit ${{ github.sha }} and passed APK integrity verification.
           files: gofindme-debug.apk
