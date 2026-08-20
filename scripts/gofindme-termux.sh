@@ -1,21 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # GoFindMe — Termux launcher (mobile).
 #
-# Every run: ensures dependencies, pulls the latest code, then starts the server
-# and opens the dashboard. Fast on subsequent runs (only installs when needed).
-#
-# One-time setup (paste into Termux):
-#   pkg install -y git
-#   git clone https://github.com/ether4o4/GoFindMe ~/GoFindMe
-#   bash ~/GoFindMe/scripts/gofindme-termux.sh
-# Then to auto-launch whenever you open Termux, add this line to ~/.bashrc:
-#   bash ~/GoFindMe/scripts/gofindme-termux.sh
+# First run installs the small Python server stack. It also exposes a dead-simple
+# `gofindme TARGET` command through $PREFIX/bin, so the common workflow is one line.
 set -e
 
 REPO_URL="${GOFINDME_REPO:-https://github.com/ether4o4/GoFindMe}"
 PORT="${GOFINDME_PORT:-8000}"
 
-# --- locate (or clone) the repo ---
 if [ -f "app/main.py" ] && [ -d ".git" ]; then
   REPO_DIR="$(pwd)"
 elif [ -d "$HOME/GoFindMe/.git" ]; then
@@ -28,20 +20,23 @@ else
 fi
 cd "$REPO_DIR"
 
-# --- check for updates ---
 echo "==> Checking for updates..."
 git pull --ff-only 2>/dev/null && echo "    up to date." || echo "    (skipped — offline or local changes)"
 
-# --- ensure dependencies (only when something is missing) ---
-# Termux-friendly set: cryptography from the system package, pydantic v1 so no
-# Rust build is needed; everything else is pure Python.
+# Make the one-command launcher available everywhere in Termux.
+if [ -f "$REPO_DIR/scripts/gofindme" ]; then
+  chmod +x "$REPO_DIR/scripts/gofindme" 2>/dev/null || true
+  if [ -d "${PREFIX:-}/bin" ] && [ -w "${PREFIX:-}/bin" ]; then
+    ln -sf "$REPO_DIR/scripts/gofindme" "$PREFIX/bin/gofindme"
+  fi
+fi
+
 if ! python -c "import fastapi, uvicorn, httpx, pydantic, passlib, cryptography" >/dev/null 2>&1; then
   echo "==> Installing dependencies (first run only, ~1-2 min)..."
-  pkg install -y python git python-cryptography
+  pkg install -y python git python-cryptography curl
   pip install --quiet fastapi "uvicorn" httpx "pydantic<2" python-multipart passlib
 fi
 
-# --- open the dashboard once the server is up, then run it ---
 URL="http://127.0.0.1:${PORT}/"
 (
   for _ in $(seq 1 40); do
