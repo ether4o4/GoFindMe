@@ -4,7 +4,14 @@ import { VIEWS, setRerender, setPrefill } from "./views.js";
 
 const app = document.getElementById("app");
 
-// Primary nav (sidebar) + which appear in the mobile bottom bar.
+// A shared target or CLI handoff can launch the web console directly into the
+// investigator. This keeps the common path dead simple: one target in, search.
+const quickTarget = new URLSearchParams(location.search).get("target");
+if (quickTarget && quickTarget.trim()) {
+  setPrefill(quickTarget.trim());
+  if (!location.hash || location.hash === "#/") history.replaceState(null, "", location.pathname + location.search + "#/investigate");
+}
+
 const NAV = [
   { key: "investigate", label: "Investigate", icon: "investigate", mobile: true },
   { key: "cases", label: "Cases", icon: "cases", mobile: true },
@@ -21,7 +28,6 @@ const ADV = [
 const LABELS = Object.fromEntries([...NAV, ...ADV].map(n => [n.key, n.label]));
 
 let me = null;
-
 setUnauthorizedHandler(() => { clearToken(); showLogin(); });
 boot();
 
@@ -35,7 +41,6 @@ async function boot() {
   catch { showLogin(); }
 }
 
-/* ------------------------------ brand mark ------------------------------ */
 function brandmark(withTag = true) {
   return el("div", { class: "brandmark" }, [
     el("div", { class: "glyph" }, [icon("investigate")]),
@@ -46,13 +51,10 @@ function brandmark(withTag = true) {
   ]);
 }
 
-/* ------------------------------ auth screens ---------------------------- */
 function authShell(title, subtitle, inputs, submitText, onSubmit) {
   clear(app);
   const card = el("div", { class: "authcard" }, [
-    brandmark(),
-    el("h1", { text: title }),
-    el("div", { class: "sub", text: subtitle }),
+    brandmark(), el("h1", { text: title }), el("div", { class: "sub", text: subtitle }),
     el("div", { class: "col", style: "margin-top:8px" }, [
       ...Object.entries(inputs).map(([k, i]) => field(k, i)),
       button(submitText, { cls: "primary block lg", onclick: onSubmit }),
@@ -88,43 +90,31 @@ function showLogin() {
   });
 }
 
-/* -------------------------------- app shell ----------------------------- */
 function navButton(item) {
   return el("button", { class: "navlink", "data-route": item.key,
-    onclick: () => { location.hash = "#/" + item.key; } },
-    [icon(item.icon), el("span", { text: item.label })]);
+    onclick: () => { location.hash = "#/" + item.key; } }, [icon(item.icon), el("span", { text: item.label })]);
 }
 
 function renderShell() {
   clear(app);
   const uname = (me && me.username) || "operator";
   const sidebar = el("aside", { class: "sidebar" }, [
-    brandmark(),
-    ...NAV.map(navButton),
-    el("div", { class: "navsec", text: "Advanced" }),
-    ...ADV.map(navButton),
-    el("div", { class: "grow" }),
-    el("div", { class: "userchip" }, [
+    brandmark(), ...NAV.map(navButton), el("div", { class: "navsec", text: "Advanced" }), ...ADV.map(navButton),
+    el("div", { class: "grow" }), el("div", { class: "userchip" }, [
       el("div", { class: "av", text: uname.slice(0, 1).toUpperCase() }),
-      el("div", { style: "min-width:0;flex:1" }, [
-        el("div", { class: "nm", text: uname }), el("div", { class: "ro", text: "Owner · single-user" })]),
+      el("div", { style: "min-width:0;flex:1" }, [el("div", { class: "nm", text: uname }), el("div", { class: "ro", text: "Owner · single-user" })]),
       button("", { cls: "sm ghost", icon: "logout", label: "Log out", onclick: logout }),
     ]),
   ]);
-
   const topbar = el("header", { class: "topbar" }, [
     el("div", { class: "crumbs", id: "crumbs" }, [el("h1", { id: "page-title", text: "Investigate" })]),
-    el("div", { class: "sp" }),
-    el("div", { id: "topbar-actions", class: "row" }),
+    el("div", { class: "sp" }), el("div", { id: "topbar-actions", class: "row" }),
   ]);
   const main = el("main", { class: "main" }, [topbar, el("div", { class: "content", id: "view" })]);
-
-  const mob = el("nav", { class: "mobnav" }, [...NAV.filter(n => n.mobile), ...ADV.filter(n => n.mobile)]
-    .map(item => el("button", { "data-route": item.key, onclick: () => { location.hash = "#/" + item.key; } },
+  const mob = el("nav", { class: "mobnav" }, [...NAV.filter(n => n.mobile), ...ADV.filter(n => n.mobile)].map(item =>
+    el("button", { "data-route": item.key, onclick: () => { location.hash = "#/" + item.key; } },
       [icon(item.icon), el("span", { text: item.label })])));
-
   app.append(el("div", { class: "app-shell" }, [sidebar, main]), mob);
-
   setRerender(() => renderRoute(parseHash()));
   window.addEventListener("hashchange", () => renderRoute(parseHash()));
   renderRoute(parseHash());
@@ -138,19 +128,13 @@ function parseHash() {
 
 async function renderRoute({ route, params }) {
   runDisposers();
-  for (const t of document.querySelectorAll(".navlink, .mobnav button"))
-    t.classList.toggle("active", t.dataset.route === route);
-  // reset header
+  for (const t of document.querySelectorAll(".navlink, .mobnav button")) t.classList.toggle("active", t.dataset.route === route);
   const crumbs = document.getElementById("crumbs");
   clear(crumbs); crumbs.append(el("h1", { id: "page-title", text: LABELS[route] || "Investigate" }));
   clear(document.getElementById("topbar-actions"));
-  const view = document.getElementById("view");
-  clear(view);
-  try {
-    await VIEWS[route](view, params);
-  } catch (e) {
-    view.append(el("div", { class: "callout bad" }, [icon("alert"), el("div", { text: "Error: " + e.message })]));
-  }
+  const view = document.getElementById("view"); clear(view);
+  try { await VIEWS[route](view, params); }
+  catch (e) { view.append(el("div", { class: "callout bad" }, [icon("alert"), el("div", { text: "Error: " + e.message })])); }
   window.scrollTo(0, 0);
 }
 
