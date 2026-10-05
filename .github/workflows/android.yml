@@ -21,6 +21,7 @@ on:
 
 jobs:
   build:
+    if: ${{ !startsWith(github.ref_name, 'polish/') && !startsWith(github.head_ref, 'polish/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

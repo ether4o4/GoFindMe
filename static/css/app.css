@@ -307,6 +307,16 @@ details>.body{padding:13px 14px}
 }
 @media(min-width:861px){.mobmenu-btn{display:none}}
 .hidden{display:none}
+:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+@media(max-width:860px){
+  .mobnav button{min-height:48px;touch-action:manipulation}
+  .topbar{padding-top:calc(13px + env(safe-area-inset-top))}
+  .content{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
+  .modal{max-height:88dvh}
+}
 
 /* ===== finding cards: lead note + keyless pivot links ===== */
 .card .cd .finding-note{color:var(--text);margin:1px 0 9px;font-size:12.5px;line-height:1.5}
