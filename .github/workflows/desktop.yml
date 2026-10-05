@@ -14,6 +14,7 @@ on:
 
 jobs:
   build:
+    if: ${{ !startsWith(github.ref_name, 'polish/') && !startsWith(github.head_ref, 'polish/') }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +52,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    if: ${{ !startsWith(github.ref_name, 'polish/') && !startsWith(github.head_ref, 'polish/') }}
     needs: build
     runs-on: ubuntu-latest
     permissions:

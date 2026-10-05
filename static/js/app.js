@@ -29,6 +29,9 @@ const LABELS = Object.fromEntries([...NAV, ...ADV].map(n => [n.key, n.label]));
 
 let me = null;
 setUnauthorizedHandler(() => { clearToken(); showLogin(); });
+window.addEventListener("hashchange", () => {
+  if (getToken() && document.getElementById("view")) void renderRoute(parseHash());
+});
 boot();
 
 async function boot() {
@@ -52,6 +55,7 @@ function brandmark(withTag = true) {
 }
 
 function authShell(title, subtitle, inputs, submitText, onSubmit) {
+  runDisposers();
   clear(app);
   const card = el("div", { class: "authcard" }, [
     brandmark(), el("h1", { text: title }), el("div", { class: "sub", text: subtitle }),
@@ -116,7 +120,7 @@ function renderShell() {
       [icon(item.icon), el("span", { text: item.label })])));
   app.append(el("div", { class: "app-shell" }, [sidebar, main]), mob);
   setRerender(() => renderRoute(parseHash()));
-  window.addEventListener("hashchange", () => renderRoute(parseHash()));
+
   renderRoute(parseHash());
 }
 
